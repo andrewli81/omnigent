@@ -28,7 +28,7 @@ import pytest
 
 from tests.e2e.conftest import (
     create_runner_bound_session,
-    poll_session_until_terminal,
+    poll_until_terminal,
     send_user_message_to_session,
 )
 
@@ -49,12 +49,11 @@ def _wait_for_in_progress(
     while time.monotonic() < deadline:
         resp = client.get(f"/v1/responses/{response_id}")
         body = resp.json()
-        if body["status"] == "in_progress":
+        status = body.get("status")
+        if status == "in_progress":
             return
-        if body["status"] in ("completed", "failed", "cancelled"):
-            raise AssertionError(
-                f"Response reached terminal state {body['status']} before in_progress"
-            )
+        if status in ("completed", "failed", "cancelled"):
+            raise AssertionError(f"Response reached terminal state {status} before in_progress")
         time.sleep(0.3)
     raise AssertionError(f"Response {response_id} didn't reach in_progress within {timeout}s")
 
@@ -153,10 +152,9 @@ def test_cancel_and_recover_journey(
     )
 
     # ── Step 6: Poll until the recovery turn completes ─────────
-    recovery_body = poll_session_until_terminal(
+    recovery_body = poll_until_terminal(
         http_client,
-        session_id=session_id,
-        response_id=recovery_id,
+        recovery_id,
         timeout=120,
     )
     assert recovery_body["status"] == "completed", (
