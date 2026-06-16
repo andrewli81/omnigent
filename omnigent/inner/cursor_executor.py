@@ -427,7 +427,13 @@ class CursorExecutor(Executor):
                 return _tool_error_payload(
                     f"Tool {tool_name!r} timed out after {_TOOL_CALL_TIMEOUT_S:.0f}s."
                 )
-            except BaseException as exc:  # noqa: BLE001 — must never crash the daemon thread
+            # A failed *or cancelled* coroutine: future.result() raises the
+            # coroutine's exception, or concurrent.futures.CancelledError (an
+            # Exception subclass) when the future is cancelled. Catch Exception —
+            # not BaseException — so any tool failure becomes a tool error
+            # instead of crashing the daemon thread, while KeyboardInterrupt /
+            # SystemExit still propagate.
+            except Exception as exc:  # noqa: BLE001 — thread boundary: failures become tool errors
                 future.cancel()
                 return _tool_error_payload(f"Tool {tool_name!r} failed: {exc}")
             return _encode_tool_result(result)
