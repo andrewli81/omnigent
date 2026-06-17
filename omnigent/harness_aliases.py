@@ -15,6 +15,9 @@ HARNESS_ALIASES: dict[str, str] = {
     # canonical id is "antigravity" (matches the registry / workflow type).
     "agy": "antigravity",
     "google-antigravity": "antigravity",
+    # User-facing spelling for Moonshot AI's Kimi Code CLI; the canonical id
+    # is "kimi" (matches the binary and the registry / workflow type).
+    "kimi-code": "kimi",
 }
 
 # Canonical native-CLI harness spellings. These harnesses type messages into

@@ -473,6 +473,15 @@ def _pick_first_run_harness() -> _FirstRunPlan | None:
         return _FirstRunPlan(harness="codex", agent=None)
     if default_provider_for_harness(config, "pi") is not None:
         return _FirstRunPlan(harness="pi", agent=None)
+    # Kimi authenticates against its own backend (``kimi login`` OAuth or a
+    # Moonshot API key) rather than the ambient-detected provider config, so
+    # ``default_provider_for_harness`` can't gate it. Fall back to "binary
+    # installed" as the readiness proxy: the executor will fail loud at the
+    # first turn if no provider is actually configured.
+    from omnigent.onboarding.harness_install import KIMI_KEY, harness_cli_installed
+
+    if harness_cli_installed(KIMI_KEY):
+        return _FirstRunPlan(harness="kimi", agent=None)
     return None
 
 
@@ -1133,6 +1142,7 @@ _CLICK_SUBCOMMANDS: frozenset[str] = frozenset(
         "debby",
         "debug",
         "host",
+        "kimi",
         "lakebox",
         "login",
         "pane-picker",
@@ -4249,6 +4259,41 @@ def debby(run_args: tuple[str, ...]) -> None:
     _run_bundled_agent("debby", run_args)
 
 
+@cli.command(
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+    }
+)
+@click.argument("run_args", nargs=-1, type=click.UNPROCESSED)
+def kimi(run_args: tuple[str, ...]) -> None:
+    # Param docs live in comments — Click uses the docstring for --help.
+    # :param run_args: Pass-through args for ``run``.
+    """Launch Kimi Code CLI, headlessly via the Omnigent REPL.
+
+    Shorthand for ``omnigent run --harness kimi``. Kimi
+    (https://github.com/MoonshotAI/Kimi-Code) is Moonshot AI's
+    multi-provider coding agent; Omnigent drives it via
+    ``kimi --print --output-format stream-json`` per turn and routes
+    the JSONL transcript through the standard Omnigent REPL.
+
+    No Omnigent provider configuration is needed — kimi authenticates
+    against its own backend (``kimi login`` for OAuth, or a Moonshot
+    API key).
+
+    \b
+    Examples:
+      omnigent kimi
+      omnigent kimi -p "summarise the README"
+      omnigent kimi -m kimi-k2-turbo
+    """
+    run.main(
+        args=["--harness", "kimi", *run_args],
+        prog_name="omnigent run",
+        standalone_mode=False,
+    )
+
+
 @cli.command()
 @click.argument("target", required=False, metavar="[CONV_ID]")
 @click.option(
@@ -4308,7 +4353,7 @@ def resume(
 # into a materialized copy of the spec before the server starts.
 _HARNESS_CHOICES_HELP = (
     "'claude' (alias for 'claude-sdk'), 'claude-sdk', 'codex', "
-    "'cursor', "
+    "'cursor', 'kimi', "
     "'openai-agents', 'open-responses', or 'pi'"
 )
 _HARNESS_HELP = f"Harness to use for a local agent: {_HARNESS_CHOICES_HELP}."
@@ -4340,6 +4385,10 @@ _DEFAULT_HARNESS_PROMPTS = {
     ),
     "cursor": (
         "You are Cursor, running through Omnigent. Help the user with software engineering tasks."
+    ),
+    "kimi": (
+        "You are Kimi Code, running through Omnigent. "
+        "Help the user with software engineering tasks."
     ),
 }
 _DEFAULT_HARNESS_PROMPT = "You are a helpful coding agent running through Omnigent."

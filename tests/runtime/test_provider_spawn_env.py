@@ -28,6 +28,7 @@ import yaml as _yaml
 from omnigent.runtime.workflow import (
     _build_claude_sdk_spawn_env,
     _build_codex_spawn_env,
+    _build_kimi_spawn_env,
     _build_openai_agents_sdk_spawn_env,
     _build_pi_spawn_env,
 )
@@ -917,3 +918,68 @@ def test_codex_undismissed_config_provider_routes_via_detection(
     env = _build_codex_spawn_env(spec, workdir=None)
 
     assert env["HARNESS_CODEX_MODEL_PROVIDER"] == "Databricks"
+
+
+# ── Kimi Code CLI spawn-env ────────────────────────────────────────────────
+
+
+def test_kimi_spawn_env_threads_spec_model_only(config_home: Path) -> None:
+    """The kimi builder only emits ``HARNESS_KIMI_MODEL`` (when set) and
+    ``HARNESS_KIMI_CWD`` (when workdir given). Upstream kimi has no per-spawn
+    provider override, so no HARNESS_KIMI_GATEWAY_* / _DATABRICKS_PROFILE
+    env vars are emitted — provider routing lives in ``~/.kimi/config.toml``."""
+    _write_config(config_home, {"providers": {}})
+    spec = _make_spec(harness="kimi", model="kimi-k2-turbo")
+
+    env = _build_kimi_spawn_env(spec, workdir=None)
+
+    assert env == {"HARNESS_KIMI_MODEL": "kimi-k2-turbo"}
+
+
+def test_kimi_workdir_threads_through_as_cwd(config_home: Path, tmp_path: Path) -> None:
+    """``workdir`` lands in ``HARNESS_KIMI_CWD`` so kimi's subprocess runs in
+    the bundle dir (upstream kimi has no ``--work-dir`` flag, so the executor
+    threads this as ``cwd=`` on the subprocess)."""
+    _write_config(config_home, {"providers": {}})
+    spec = _make_spec(harness="kimi")
+
+    env = _build_kimi_spawn_env(spec, workdir=tmp_path)
+
+    assert env["HARNESS_KIMI_CWD"] == str(tmp_path)
+
+
+def test_kimi_no_provider_emits_no_gateway_vars(config_home: Path) -> None:
+    """With no provider configured and no spec auth, kimi uses its own
+    ``kimi login`` credentials — no HARNESS_KIMI_GATEWAY_* leaks in.
+
+    A regression here would either steal an ambient OPENAI_API_KEY (mis-billing)
+    or point at a stale URL the user never configured. Upstream kimi reads its
+    provider config from ``~/.kimi/config.toml``; Omnigent never injects."""
+    _write_config(config_home, {"providers": {}})
+    spec = _make_spec(harness="kimi")
+
+    env = _build_kimi_spawn_env(spec, workdir=None)
+
+    assert "HARNESS_KIMI_GATEWAY_BASE_URL" not in env
+    assert "HARNESS_KIMI_GATEWAY_API_KEY" not in env
+    assert "HARNESS_KIMI_GATEWAY_PROVIDER" not in env
+    assert "HARNESS_KIMI_DATABRICKS_PROFILE" not in env
+
+
+def test_kimi_ignores_global_default_provider(config_home: Path) -> None:
+    """An openai default provider does NOT inject creds into the kimi env.
+
+    Counterpart to the other harnesses: their spawn-env builders adopt the
+    global default. For kimi we DO NOT — upstream has no per-spawn provider
+    override flag, so silently injecting a key the executor can't pass to the
+    subprocess would be misleading (and would mis-bill the user against an
+    OpenAI key when their ``~/.kimi/config.toml`` actually points at
+    Moonshot). The builder emits no gateway vars regardless of what's
+    configured."""
+    _write_config(config_home, _openai_default_config())
+    spec = _make_spec(harness="kimi")
+
+    env = _build_kimi_spawn_env(spec, workdir=None)
+
+    assert "HARNESS_KIMI_GATEWAY_BASE_URL" not in env
+    assert "HARNESS_KIMI_GATEWAY_API_KEY" not in env

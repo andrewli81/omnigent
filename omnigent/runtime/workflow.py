@@ -139,7 +139,7 @@ _logger = logging.getLogger(__name__)
 # (hyphen), e.g. ``"claude_sdk"`` → ``"claude-sdk"`` used by ``_HARNESS_MODULES``.
 
 
-AgentHarnessType = Literal["claude-sdk", "codex", "pi", "openai-agents-sdk", "antigravity"]
+AgentHarnessType = Literal["claude-sdk", "codex", "pi", "openai-agents-sdk", "antigravity", "kimi"]
 
 
 @dataclass(frozen=True)
@@ -416,6 +416,10 @@ _HARNESS_DATABRICKS_PROFILE: dict[AgentHarnessType, str] = {
     "pi": "HARNESS_PI_DATABRICKS_PROFILE",
     "openai-agents-sdk": "HARNESS_OPENAI_AGENTS_DATABRICKS_PROFILE",
     # NB: no ``antigravity`` — it has no Databricks/gateway path (Gemini-native).
+    # NB: no ``kimi`` — upstream kimi has no per-spawn provider override flag,
+    # so Omnigent cannot thread a Databricks gateway through. Users configure
+    # providers via ``kimi provider add`` in ``~/.kimi/config.toml`` (see
+    # docs/KIMI_FOLLOWUPS.md for the deferred provider-injection follow-up).
 }
 
 
@@ -581,6 +585,21 @@ def configure_agent_harness_with_provider(
         # the Databricks profile (Databricks-specific, used by the executor
         # for token refresh), then delegate gateway enrichment to ucode.
         profile = entry.profile
+        if harness_type == "kimi":
+            # Kimi has no per-spawn provider override (no ``--config-file``
+            # on the upstream binary). Provider routing lives in
+            # ``~/.kimi/config.toml`` and is managed out-of-band via
+            # ``kimi provider add``. Fail loud so the user understands why
+            # their Databricks auth didn't take effect rather than silently
+            # routing through whatever default kimi already had.
+            raise OmnigentError(
+                "The 'kimi' harness does not support per-invocation Databricks "
+                "routing. Run `kimi provider add` once to configure your "
+                "Databricks provider in ~/.kimi/config.toml, then declare the "
+                "kimi-side model in the agent spec. See docs/KIMI_FOLLOWUPS.md "
+                "for the deferred Omnigent-side provider injection work.",
+                code=ErrorCode.INVALID_INPUT,
+            )
         flag = _HARNESS_GATEWAY_FLAG.get(harness_type)
         if flag is not None:
             env[flag] = "true"
@@ -593,6 +612,20 @@ def configure_agent_harness_with_provider(
     if harness_type == "pi":
         _apply_provider_to_pi(env, entry)
         return
+    if harness_type == "kimi":
+        # Same reasoning as the Databricks branch above: upstream kimi has no
+        # per-spawn provider override, so an inline-family provider on the
+        # spec cannot be threaded through. Fail loud rather than emit gateway
+        # env vars the executor no longer reads.
+        raise OmnigentError(
+            "The 'kimi' harness does not support per-invocation generic "
+            "providers (kimi has no ``--config-file`` flag). Configure the "
+            "provider once via `kimi provider add` in ~/.kimi/config.toml, "
+            "then pin the resulting model id in the agent spec. See "
+            "docs/KIMI_FOLLOWUPS.md for the deferred Omnigent-side provider "
+            "injection work.",
+            code=ErrorCode.INVALID_INPUT,
+        )
     family_name = _PROVIDER_HARNESS_FAMILY[harness_type]
     family = entry.family(family_name)
     if family is None:
@@ -1480,6 +1513,41 @@ def _build_cursor_spawn_env(
     os_env_payload = _serialize_os_env(spec.os_env)
     if os_env_payload is not None:
         env["HARNESS_CURSOR_OS_ENV"] = os_env_payload
+    return env
+
+
+def _build_kimi_spawn_env(
+    spec: AgentSpec,
+    *,
+    workdir: Path | None = None,
+) -> dict[str, str]:
+    """Build the env-var dict the kimi harness wrap reads.
+
+    Maps ``spec.executor`` fields → the ``HARNESS_KIMI_*`` env vars
+    defined in :mod:`omnigent.inner.kimi_harness`.
+
+    The upstream Kimi Code CLI has no per-spawn provider override flag
+    (no ``--config-file`` / ``--mcp-config-file``), so this builder
+    only threads the model and working directory. Provider routing for
+    kimi lives in ``~/.kimi/config.toml`` and is managed out-of-band
+    via ``kimi provider add``. A spec that declares an explicit
+    provider / Databricks / api_key auth raises in
+    :func:`configure_agent_harness_with_provider` so the user
+    understands why their auth didn't take effect rather than silently
+    routing through whatever default kimi already had.
+
+    :param spec: The agent spec.
+    :param workdir: The bundle's on-disk path. Threaded as
+        ``HARNESS_KIMI_CWD`` so the kimi subprocess runs with its cwd
+        pointed at the bundle (upstream has no ``--work-dir`` flag).
+    :returns: A dict of env-var overrides.
+    """
+    env: dict[str, str] = {}
+    model = _resolve_spec_model(spec)
+    if model is not None:
+        env["HARNESS_KIMI_MODEL"] = model
+    if workdir is not None:
+        env["HARNESS_KIMI_CWD"] = str(workdir)
     return env
 
 

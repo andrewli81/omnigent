@@ -27,7 +27,12 @@ from __future__ import annotations
 import os
 
 from omnigent.harness_aliases import HARNESS_ALIASES, canonicalize_harness
-from omnigent.onboarding.harness_install import CURSOR_KEY, PI_KEY, harness_cli_installed
+from omnigent.onboarding.harness_install import (
+    CURSOR_KEY,
+    KIMI_KEY,
+    PI_KEY,
+    harness_cli_installed,
+)
 from omnigent.onboarding.provider_config import (
     _EXECUTOR_TYPE_HARNESS_ALIASES,
     _HARNESS_FAMILY,
@@ -49,6 +54,11 @@ _SDK_HARNESSES: frozenset[str] = frozenset(
 # ``_HARNESS_FAMILY`` entry — pi uses the ``PI_SURFACE`` sentinel — so they must
 # be gated explicitly or they fail open like an unknown harness.
 _PI_HARNESSES: frozenset[str] = frozenset({PI_SURFACE, "pi-native"})
+
+# Surface name for Kimi Code in the readiness map. Mirrors :data:`PI_SURFACE`
+# — kimi is a CLI-backed harness with its own backend (Moonshot AI's), not a
+# member of the anthropic/openai families that :data:`_HARNESS_FAMILY` keys.
+KIMI_SURFACE = "kimi"
 
 
 def _canonical_harness(harness: str) -> str:
@@ -72,10 +82,14 @@ def _install_key(canonical: str) -> str:
     """Return the install-spec key whose CLI binary *canonical* requires.
 
     :param canonical: A canonical CLI-wrapping harness id keyed in
-        ``_HARNESS_FAMILY`` (e.g. ``"codex-native"``), or ``"pi"``.
+        ``_HARNESS_FAMILY`` (e.g. ``"codex-native"``), ``"pi"``, or
+        ``"kimi"``.
     :returns: ``"anthropic"`` / ``"openai"`` for the claude/codex CLIs,
-        or :data:`~omnigent.onboarding.harness_install.PI_KEY` for pi.
+        :data:`~omnigent.onboarding.harness_install.PI_KEY` for pi,
+        :data:`~omnigent.onboarding.harness_install.KIMI_KEY` for kimi.
     """
+    if canonical == KIMI_SURFACE:
+        return KIMI_KEY
     return _HARNESS_FAMILY.get(canonical) or PI_KEY
 
 
@@ -113,7 +127,11 @@ def harness_is_configured(harness: str) -> bool:
         from omnigent.onboarding.cursor_auth import cursor_api_key_configured
 
         return cursor_api_key_configured() or bool(os.environ.get("CURSOR_API_KEY"))
-    if canonical not in _HARNESS_FAMILY and canonical not in _PI_HARNESSES:
+    if (
+        canonical not in _HARNESS_FAMILY
+        and canonical not in _PI_HARNESSES
+        and canonical != KIMI_SURFACE
+    ):
         # Unknown harness — the daemon has no install metadata for it, so
         # it can't assess readiness. Fail open (custom/newer harnesses,
         # version skew).
@@ -139,4 +157,5 @@ def configured_harness_map() -> dict[str, bool]:
     spellings.update(HARNESS_ALIASES)
     spellings.update(_PI_HARNESSES)
     spellings.add(CURSOR_KEY)
+    spellings.add(KIMI_SURFACE)
     return {spelling: harness_is_configured(spelling) for spelling in spellings}

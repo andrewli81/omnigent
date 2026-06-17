@@ -62,6 +62,13 @@ _HARNESS_MODULES: dict[str, str] = {
     # cursor harness wrap (Cursor's ``cursor-agent`` CLI, headless). See
     # omnigent/inner/cursor_harness.py.
     "cursor": "omnigent.inner.cursor_harness",
+    # Kimi Code CLI harness wrap (Moonshot AI's ``kimi`` CLI, headless). See
+    # omnigent/inner/kimi_harness.py. Drives ``kimi --print --output-format
+    # stream-json`` per turn; resumes via ``--session <uuid>`` captured from
+    # the prior turn's stderr.
+    "kimi": "omnigent.inner.kimi_harness",
+    # User-facing alias matching the upstream product name ("Kimi Code").
+    "kimi-code": "omnigent.inner.kimi_harness",
     # Google Antigravity SDK harness wrap. See
     # omnigent/inner/antigravity_harness.py. In-process SDK harness
     # (``google-antigravity``), like openai-agents — Omnigent spawns no CLI

@@ -99,6 +99,12 @@ _PROVIDER_RESOLUTION_HARNESS: dict[str, str] = {
     "antigravity": "antigravity",
     "agy": "antigravity",
     "google-antigravity": "antigravity",
+    # Kimi Code CLI is multi-provider; it shares no resolution path with an
+    # existing harness. The identity entry keeps callers that iterate this
+    # map (e.g. ``list_models_for_worker``) finding the harness so they
+    # don't fall through to a noisy "unknown harness" branch.
+    "kimi": "kimi",
+    "kimi-code": "kimi",
 }
 
 # Preferred inline family per single-family harness (pi consumes both).

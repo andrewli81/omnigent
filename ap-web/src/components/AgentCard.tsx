@@ -31,6 +31,8 @@ function iconForAgent(agent: AvailableAgent): ComponentType<SVGProps<SVGSVGEleme
   if (agent.harness?.includes("claude")) return ClaudeIcon;
   // Exact match — a substring check would false-match e.g. "openapi".
   if (agent.harness === "pi") return PiIcon;
+  // Kimi Code falls through to BotIcon for now — see docs/KIMI_FOLLOWUPS.md
+  // item 3 for the dedicated glyph follow-up.
   return BotIcon;
 }
 

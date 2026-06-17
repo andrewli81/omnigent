@@ -128,6 +128,9 @@ def test_configured_harness_map_covers_all_spellings(
         "antigravity",
         "agy",
         "google-antigravity",
+        # Kimi Code CLI + alias.
+        "kimi",
+        "kimi-code",
     }
     assert set(result) == expected_keys
 
@@ -165,6 +168,7 @@ def test_configured_harness_map_gates_only_cli_harnesses(
         "codex-native",
         "native-codex",
         "pi",
+        "kimi",
     ):
         assert result[cli] is False, f"{cli} should be gated on its CLI binary"
 
@@ -182,6 +186,25 @@ def test_configured_harness_map_all_true_with_clis(
     monkeypatch.setenv("CURSOR_API_KEY", "crsr_ready")
     result = configured_harness_map()
     assert all(result.values())
+
+
+def test_kimi_readiness_keys_off_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Kimi is configured iff the ``kimi`` binary is on PATH.
+
+    Kimi authenticates against Moonshot AI's backend via ``kimi login`` (OAuth
+    or a Moonshot API key), which the daemon cannot inspect — so readiness
+    keys off binary presence, and the alias ``kimi-code`` resolves to the
+    same verdict via canonicalization.
+    """
+    _no_clis_installed(monkeypatch)
+    assert harness_is_configured("kimi") is False
+    assert harness_is_configured("kimi-code") is False
+
+    _all_clis_installed(monkeypatch)
+    assert harness_is_configured("kimi") is True
+    assert harness_is_configured("kimi-code") is True
 
 
 def test_cursor_readiness_keys_off_api_key(

@@ -2008,6 +2008,13 @@ def test_run_without_agent_drops_into_configure_when_unconfigured(
         "omnigent.onboarding.provider_config.default_provider_for_harness",
         _fake_provider_for(),  # nothing configured
     )
+    # The kimi fallback in ``_pick_first_run_harness`` gates on the ``kimi``
+    # binary being on PATH. Stub it to False so the test stays deterministic
+    # on machines where the developer has kimi installed.
+    monkeypatch.setattr(
+        "omnigent.onboarding.harness_install.harness_cli_installed",
+        lambda _key: False,
+    )
     # The configure picker would block on a real terminal; stub it.
     configure = Mock()
     monkeypatch.setattr("omnigent.cli._run_configure_harnesses_interactive", configure)
@@ -3928,6 +3935,13 @@ def test_pick_first_run_harness_none_when_unconfigured(monkeypatch: pytest.Monke
         "omnigent.onboarding.provider_config.default_provider_for_harness",
         _fake_provider_for(),  # nothing configured
     )
+    # The kimi fallback in _pick_first_run_harness gates on the ``kimi``
+    # binary being on PATH. Stub it to False so the test stays deterministic
+    # on machines where the developer has kimi installed.
+    monkeypatch.setattr(
+        "omnigent.onboarding.harness_install.harness_cli_installed",
+        lambda _key: False,
+    )
     assert _pick_first_run_harness() is None
 
 
@@ -4009,6 +4023,13 @@ def test_resolve_first_run_plan_drops_into_configure_when_empty(
     monkeypatch.setattr(
         "omnigent.onboarding.provider_config.default_provider_for_harness",
         _fake_provider_for(),  # nothing configured, before and after configure
+    )
+    # The kimi fallback in ``_pick_first_run_harness`` gates on the ``kimi``
+    # binary being on PATH. Stub it to False so the test stays deterministic
+    # regardless of the developer's local install.
+    monkeypatch.setattr(
+        "omnigent.onboarding.harness_install.harness_cli_installed",
+        lambda _key: False,
     )
     configure = Mock()
     monkeypatch.setattr("omnigent.cli._run_configure_harnesses_interactive", configure)
