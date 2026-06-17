@@ -877,16 +877,6 @@ skips:
     mode: skip
 
   # Cluster: cancel/history.
-  - id: tests/e2e/test_cancel_history.py::test_cancel_appends_history_marker_and_followup_sees_it
-    reason: "Force-merge backlog (cancel-history cluster). First observed failing at 2fe283bf (2026-05-23T00:08:54Z, E2E)."
-    issue: 0
-    cluster: steering-cancel-compaction-state
-    mode: skip
-  - id: tests/e2e/test_cancel_history.py::test_cancel_mid_tool_call_followup_succeeds
-    reason: "Force-merge backlog (cancel-history cluster). First observed failing at 305e9bb9 (2026-05-23T06:06:59Z, E2E)."
-    issue: 0
-    cluster: steering-cancel-compaction-state
-    mode: skip
 
   # Cluster: databricks_supervisor harness parametrizations broken
   # across multiple unrelated test files (yaml hello world, real
