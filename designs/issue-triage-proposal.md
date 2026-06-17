@@ -10,12 +10,13 @@ Minimize maintainer cost per issue. Let an AI bot handle the routine work (class
 
 Every issue flows through these stages. The AI bot handles Stage 1-3 autonomously; maintainers only engage at Stage 4.
 
-```
- ┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌───────────────────┐
- │  Intake   │────▶│  AI Classify  │────▶│  AI Resolve   │────▶│  Maintainer Queue  │
- │ (template)│     │  & Dedupe     │     │  or Route     │     │  (escalated only)  │
- └──────────┘     └──────────────┘     └──────────────┘     └───────────────────┘
-    Stage 1            Stage 2              Stage 3               Stage 4
+```mermaid
+flowchart LR
+    S1["**Stage 1**\nIntake\n(template)"]
+    S2["**Stage 2**\nAI Classify\n& Dedupe"]
+    S3["**Stage 3**\nAI Resolve\nor Route"]
+    S4["**Stage 4**\nMaintainer Queue\n(escalated only)"]
+    S1 --> S2 --> S3 --> S4
 ```
 
 ### Stage 1 — Lightweight Intake
