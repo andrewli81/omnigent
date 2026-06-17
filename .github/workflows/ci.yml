@@ -144,17 +144,9 @@ jobs:
           PYTHONFAULTHANDLER: "1"
           PYTEST_PROGRESS_LOG_DIR: artifacts/progress
           OMNIGENT_TOKEN_USAGE_JSON: artifacts/tokens-${{ matrix.group }}.json
-          # Write coverage data OUTSIDE the repo working dir. coverage.py's
-          # parallel writer (xdist -n) drops transient
-          # ``.coverage.<group>.<host>.pid<N>.<rand>`` files next to
-          # COVERAGE_FILE and renames them away as it combines. When those
-          # landed under the repo (the bwrap sandbox ro-binds cwd), the
-          # dotfile masker could race them: it scanned a transient file,
-          # then bwrap tried to create the now-vanished mountpoint inside a
-          # read-only mount and aborted the helper ("Can't create file ...:
-          # Read-only file system"). Keeping the churn in $RUNNER_TEMP means
-          # the sandbox never sees it. The final combined file is copied back
-          # into artifacts/ below for the coverage-report job to consume.
+          # Outside the repo: coverage.py's transient `.coverage.*` files
+          # under the ro-bound cwd raced the sandbox's dotfile masker. Staged
+          # back into artifacts/ below for the coverage-report job.
           COVERAGE_FILE: ${{ runner.temp }}/omnigent-coverage/.coverage.${{ matrix.group }}
           # sysmon: the default C-trace coverage backend pushed the heaviest
           # shard past its timeout; only line coverage is collected.
@@ -182,9 +174,6 @@ jobs:
       - name: Stage coverage data for upload
         if: always()
         shell: bash
-        # COVERAGE_FILE lives under $RUNNER_TEMP (outside the sandboxed repo);
-        # copy the combined per-shard data file back into artifacts/ so the
-        # coverage-report job's ``covdata/**/.coverage.*`` glob still finds it.
         run: |
           cov_file="${{ runner.temp }}/omnigent-coverage/.coverage.${{ matrix.group }}"
           if [[ -f "$cov_file" ]]; then

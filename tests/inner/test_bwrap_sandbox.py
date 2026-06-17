@@ -773,33 +773,19 @@ def test_dotfile_masking_skips_target_that_vanished_after_scan(
     tmp_path: Path,
 ) -> None:
     """
-    A dotfile that the scan saw but that no longer exists when the
-    argv is assembled produces NO mask triple — the TOCTOU race that
-    used to abort the helper.
-
-    Repro of the flaky CI failure: ``--cov`` under ``pytest -n``
-    drops transient ``.coverage.<group>.<host>.pid<N>.<rand>`` files
-    under cwd, which is ro-bound into the sandbox, then renames them
-    away. The masker scanned a transient file and emitted
-    ``--bind-try /dev/null <path>``; by exec time the file was gone,
-    so bwrap had to CREATE the mountpoint inside a read-only mount
-    and died with "Can't create file ...: Read-only file system".
-    ``--bind-try`` only tolerates a missing SOURCE (/dev/null), not
-    an uncreatable TARGET, so the last-moment re-stat must drop the
-    candidate entirely.
-
-    A persistent dotfile present alongside the vanished one is still
-    masked — the host-dotfile-leak defense is unchanged.
+    A dotfile the scan saw but that vanished before the argv is built
+    produces NO mask triple — otherwise bwrap would try to create the
+    mountpoint inside the ro-bound cwd and abort (the flaky CI failure,
+    where coverage.py's transient ``.coverage.*`` files raced the scan).
+    A persistent dotfile alongside it is still masked.
     """
     from omnigent.inner import bwrap_sandbox
     from omnigent.inner._cwd_scan import MaskedEntry
 
     cwd = tmp_path.resolve(strict=False)
-    # A persistent secret that must stay masked.
     (tmp_path / ".env").write_text("SECRET=42")
     present_path = cwd / ".env"
-    # A transient coverage data file the scan "saw" but that has been
-    # renamed/removed before the argv is built — never created on disk.
+    # Never created on disk: simulates a file renamed away after the scan.
     vanished_path = cwd / ".coverage.inner-rest.host.pid2942.XbRGYxCx"
 
     real_scan = bwrap_sandbox.scan_cwd_mask_entries
@@ -814,12 +800,9 @@ def test_dotfile_masking_skips_target_that_vanished_after_scan(
     with patch.object(bwrap_sandbox, "scan_cwd_mask_entries", _scan_with_phantom):
         argv = backend.wrap_launcher_argv([sys.executable, "-c", "pass"], policy, tmp_path)
 
-    # The persistent dotfile is still masked.
     assert _has_pair(argv, "--bind-try", "/dev/null", str(present_path)), (
         ".env (present) should still be masked with --bind-try /dev/null."
     )
-    # The vanished target produces no mask of any kind — nothing for
-    # bwrap to create a mountpoint for inside the ro-bound cwd.
     assert _index_of_triple(argv, "--bind-try", "/dev/null", str(vanished_path)) is None, (
         "A vanished dotfile must NOT be masked — bwrap would have to "
         "create the mountpoint inside the read-only cwd bind and abort. "
