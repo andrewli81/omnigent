@@ -3255,8 +3255,6 @@ def server_status(json_output: bool) -> None:
     :param json_output: Emit machine-readable JSON instead of text.
     :returns: None.
     """
-    if not json_output:
-        ui.print_brandmark()
     info = local_server_status()
     daemon_attached = _find_daemon_record(_LOCAL_DAEMON_MARKER) is not None
     sessions: int | None = None
@@ -3446,8 +3444,6 @@ def upgrade(check_only: bool, force: bool, pre: bool) -> None:
     :param pre: Consider pre-releases and allow the installer to fetch them.
     :returns: None.
     """
-    ui.print_brandmark()
-
     import importlib.metadata
 
     from packaging.version import InvalidVersion, parse
@@ -6118,8 +6114,6 @@ def host_status(
     :param all_targets: Whether to inspect every known daemon target.
     :param json_output: Whether to emit machine-readable JSON.
     """
-    if not json_output:
-        ui.print_brandmark()
     if server is None:
         server = _host_group_option(ctx, "server")
     records = _selected_daemon_records(server=server, all_targets=all_targets, default_all=True)
@@ -6521,10 +6515,9 @@ def config_list() -> None:
 
     :returns: None.
     """
-    ui.print_brandmark()
-    ui.header("Defaults")
+    click.echo("Defaults")
     _print_config_defaults()
-    ui.console.print()
+    click.echo()
     _print_credentials_by_harness()
 
 

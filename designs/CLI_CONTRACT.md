@@ -81,20 +81,24 @@ Raw streams when you need them: `ui.console` (stdout), `ui.err_console`
 
 ## When to show the banner
 
-Two forms, both drawn on stderr and TTY-gated by `ui.show_banner()` (a
+Banner output is drawn on stderr and TTY-gated by `ui.show_banner()` (a
 no-op off a TTY or when `OMNIGENT_NO_BANNER` is set):
 
 - **Full lockup** — `ui.print_landing(...)` — Otto + wordmark, optional
-  gradient / tagline / epilogue. The hero moment. Use on:
+  gradient / tagline / epilogue. The hero moment, reserved for the few
+  landing surfaces:
   - `omnigent --help` (the top-level group, via `_OmnigentCLI.format_help`)
   - `omnigent setup` (first-run experience)
   - the installer banner
-- **Compact brandmark** — `ui.print_brandmark(subtitle=...)` — a single
-  `✦ omnigent` line. Use to lightly brand non-interactive read-only
-  commands (`upgrade`, `server status`, `host status`, `config list`,
-  `login`) without a full banner.
-- **Nothing** — scripted/data commands and every subcommand `--help`.
-  Don't brand `omnigent version` (its output already names the product).
+- **Nothing** — every other command. Regular commands (`version`,
+  `upgrade`, `server status`, `config list`, …) print their output
+  unbranded so the CLI stays quiet and scriptable. We deliberately do
+  *not* sprinkle a brandmark on individual commands.
+
+A compact one-line brandmark helper (`ui.print_brandmark(subtitle=...)`,
+`✦ omnigent`) exists for opt-in use, but is intentionally **not** wired
+onto any command today — add it only if a specific surface clearly wants
+light branding.
 
 The bare `omnigent` invocation on a TTY launches the REPL (its own
 branded header); it only falls back to `--help` when non-interactive, so
