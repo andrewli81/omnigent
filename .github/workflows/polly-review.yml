@@ -298,6 +298,11 @@ jobs:
           3. **Summary** — one-paragraph overall assessment.
 
           Be concise. Do not restate the diff. Focus on what matters.
+
+          IMPORTANT: Your output will be posted directly as a PR comment. Output
+          ONLY the final structured review — no coordination messages, no status
+          updates about dispatching sub-agents, no "waiting for results" narration.
+          Start your response with the review content itself.
           """
           pathlib.Path("/tmp/review_prompt.txt").write_text(prompt)
           PYEOF
