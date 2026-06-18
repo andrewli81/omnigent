@@ -847,13 +847,15 @@
   gap: 0.5em;
   margin: 0.25em 0;
 }
-/* The checkbox lives in a contenteditable=false <label>; keep it from
-   stretching and nudge it down to sit on the first text line (line-height 1.7). */
+/* The checkbox lives in a contenteditable=false <label>. Give the label the
+   height of one content line (paragraph line-height: 1.7) and center the
+   checkbox within it, so it sits on the first text line at any font size
+   instead of relying on a fixed margin nudge. */
 .tiptap-md-content .ProseMirror ul[data-type="taskList"] > li > label {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  margin-top: 0.2em;
+  height: 1.7em;
   user-select: none;
 }
 .tiptap-md-content .ProseMirror ul[data-type="taskList"] > li > label input[type="checkbox"] {

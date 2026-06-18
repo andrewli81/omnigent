@@ -21,15 +21,22 @@ import { TaskItem, TaskList } from "@tiptap/extension-list";
 import StarterKit from "@tiptap/starter-kit";
 
 let editor: Editor | null = null;
+let host: HTMLElement | null = null;
 afterEach(() => {
   editor?.destroy();
   editor = null;
+  host?.remove();
+  host = null;
 });
 
-/** Mounted editor matching the viewer's task-list configuration. */
+/** Mounted editor matching the viewer's task-list configuration. The host is
+ *  attached to the document so commands that focus the editor (e.g. the
+ *  checkbox-toggle node-view) can commit their transactions. */
 function makeEditor(markdown: string): Editor {
+  host = document.createElement("div");
+  document.body.appendChild(host);
   return new Editor({
-    element: document.createElement("div"),
+    element: host,
     extensions: [
       StarterKit.configure({ link: false, blockquote: false }),
       TaskList,
@@ -73,6 +80,30 @@ describe("task lists", () => {
   it("round-trips task-list markdown byte-faithfully", () => {
     editor = makeEditor(TASK_MD);
     expect(editor.getMarkdown().trim()).toBe(TASK_MD);
+  });
+
+  it("toggling a checkbox updates the marker and re-serializes to markdown", () => {
+    editor = makeEditor(TASK_MD);
+    const dom = editor.view.dom;
+    const boxesOf = () => dom.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    const itemsOf = () => dom.querySelectorAll("li[data-checked]");
+
+    // Click the first box ("Buy milk", unchecked). TaskItem's node-view listens
+    // for the checkbox `change` event; jsdom's .click() flips `checked` and
+    // dispatches it, mirroring a real user click.
+    boxesOf()[0].click();
+
+    expect(boxesOf()[0].checked).toBe(true);
+    expect(itemsOf()[0].getAttribute("data-checked")).toBe("true");
+    // The flip must reach the document, not just the DOM checkbox: re-serialize.
+    expect(editor.getMarkdown().trim()).toBe("- [x] Buy milk\n- [x] Ship the PR");
+
+    // Unchecking the second box ("Ship the PR") round-trips the other way.
+    boxesOf()[1].click();
+
+    expect(boxesOf()[1].checked).toBe(false);
+    expect(itemsOf()[1].getAttribute("data-checked")).toBe("false");
+    expect(editor.getMarkdown().trim()).toBe("- [x] Buy milk\n- [ ] Ship the PR");
   });
 
   it("leaves plain bullet lists as plain lists (no checkbox promotion)", () => {
