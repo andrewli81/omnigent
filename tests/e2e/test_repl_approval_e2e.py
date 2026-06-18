@@ -78,25 +78,45 @@ def repl_env(llm_api_key: str, tmp_path_factory: pytest.TempPathFactory) -> dict
     ``omnigent`` + ``omnigent_client`` resolve to this
     worktree, not the sibling editable install).
 
-    Also points ``OMNIGENT_CONFIG_HOME`` at a temp dir holding a
-    ``config.yaml`` with ``auto_open_conversation: false`` so the
-    spawned interactive REPL (which defaults the setting ON, and on
-    macOS opens the conversation via ``subprocess.run(["open", url])``)
-    does not pop a browser tab on every test run. ``--no-open`` is not
-    a valid ``run`` flag, so config is the supported suppression path.
+    Redirects ``HOME`` to a temp dir seeded with
+    ``.omnigent/config.yaml`` so the spawned interactive REPL starts
+    cleanly under pexpect:
+
+    - ``tui.theme`` is persisted, so the REPL's first-launch theme
+      picker (``_repl._load_startup_theme`` → ``startup_theme_picker``,
+      which reads ``$HOME/.omnigent/config.yaml`` — NOT
+      ``OMNIGENT_CONFIG_HOME``) is skipped. Under pexpect's pty stdin
+      is a tty, so without a persisted theme the arrow-key picker blocks
+      and the welcome banner never appears (the CI failure, where
+      ``$HOME`` is fresh).
+    - ``auto_open_conversation: false`` stops the interactive REPL from
+      opening a browser tab per run (``--no-open`` is not a valid
+      ``run`` flag; config is the supported path). ``OMNIGENT_CONFIG_HOME``
+      points at the same dir so the CLI reads it too.
+
+    Because ``HOME`` is redirected, ``DATABRICKS_CONFIG_FILE`` is pinned
+    to the real ``~/.databrickscfg`` so ``--profile`` lookups still
+    resolve, and ``OMNIGENT_SKIP_ONBOARD`` guards against any other
+    first-run prompt (these tests exercise REPL approval, not onboarding).
 
     :param llm_api_key: The API key for the LLM.
-    :param tmp_path_factory: Pytest temp-path factory for the config home.
+    :param tmp_path_factory: Pytest temp-path factory for the fake HOME.
     :returns: Env mapping for ``pexpect.spawn``.
     """
-    config_home = tmp_path_factory.mktemp("repl_config_home")
-    (config_home / "config.yaml").write_text("auto_open_conversation: false\n")
+    real_databrickscfg = Path.home() / ".databrickscfg"
+    fake_home = tmp_path_factory.mktemp("repl_home")
+    config_home = fake_home / ".omnigent"
+    config_home.mkdir(parents=True, exist_ok=True)
+    (config_home / "config.yaml").write_text(
+        "auto_open_conversation: false\ntui:\n  theme: dark\n"
+    )
     env: dict[str, str] = {
         **os.environ,
         "OPENAI_API_KEY": llm_api_key,
-        # Suppress the auto-open-browser-tab side effect of the
-        # interactive REPL via the only supported knob (config key).
+        "HOME": str(fake_home),
         "OMNIGENT_CONFIG_HOME": str(config_home),
+        "DATABRICKS_CONFIG_FILE": str(real_databrickscfg),
+        "OMNIGENT_SKIP_ONBOARD": "1",
         # Force ANSI on — pexpect captures everything, stripping
         # happens per-assertion via _strip_ansi.
         "TERM": "xterm-256color",
