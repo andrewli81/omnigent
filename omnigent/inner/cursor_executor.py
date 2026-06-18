@@ -336,13 +336,21 @@ def _encode_tool_result(result: Any) -> Any:  # type: ignore[explicit-any]
     A result that :func:`classify_tool_result` flags as anything other than
     SUCCESS — a dispatch failure (``error``), a policy block (``blocked``), a
     cancellation (``cancelled``), or any of those nested inside a
-    ``content`` / ``result`` / ``output`` / ``text`` envelope — is surfaced as
-    an ``isError`` payload so the model sees a failure. This is parity with the
-    claude-sdk handler, which the cursor harness otherwise diverged from by
-    delivering errors as ordinary, apparently-successful results (and by only
-    inspecting the top-level ``error`` / ``blocked`` keys). Everything else
-    returns its text: a ``str`` passthrough (the SDK wraps it as success), else
-    JSON.
+    ``content`` / ``result`` / ``output`` / ``text`` envelope (or under a list
+    element) — is surfaced as an ``isError`` payload so the model sees a
+    failure. This pins the encoded result to the same ``classify_tool_result``
+    verdict the executor already reports for the observed ``ToolCallComplete``
+    event (see ``_sdk_message_to_events``), rather than the top-level-only
+    ``error`` / ``blocked`` check this used to share with the claude-sdk
+    handler. (The claude-sdk handler still uses that narrower top-level check,
+    so this is *not* parity with it.) Everything else returns its text: a
+    ``str`` passthrough (the SDK wraps it as success), else JSON.
+
+    Trade-off: because ``classify_tool_result`` maps ``{"cancelled": True}`` to
+    CANCELLED (not SUCCESS), a benign cancellation result — e.g. a successful
+    ``sys_cancel_async`` returning ``{"cancelled": True, ...}`` — is encoded as
+    ``isError``. This is intentional: a non-SUCCESS verdict is treated as a
+    failure here regardless of how benign the cancellation is.
     """
     if classify_tool_result(result).status != ToolCallStatus.SUCCESS:
         encoded = result if isinstance(result, str) else json.dumps(result, default=str)

@@ -665,6 +665,32 @@ async def test_custom_tool_execute_flags_nested_blocked_with_iserror() -> None:
     assert "nested policy" in result["content"][0]["text"]
 
 
+async def test_custom_tool_execute_flags_top_level_list_error_with_iserror() -> None:
+    """A top-level list whose element carries an ``error`` is classified
+    non-SUCCESS — ``classify_tool_result`` recurses through list elements, so the
+    list-shaped payload must surface as an error too."""
+
+    async def list_err(name: str, args: dict[str, Any]) -> Any:
+        return [{"error": "list element failure"}]
+
+    result = await asyncio.to_thread(_bridged_execute(list_err), {}, None)
+    assert isinstance(result, dict) and result["isError"] is True
+    assert "list element failure" in result["content"][0]["text"]
+
+
+async def test_custom_tool_execute_flags_nested_list_error_with_iserror() -> None:
+    """An error inside a list nested under an envelope key (``content``) is
+    classified non-SUCCESS, matching ``classify_tool_result``'s recursion through
+    both envelope keys and list elements."""
+
+    async def nested_list(name: str, args: dict[str, Any]) -> Any:
+        return {"content": [{"error": "nested list failure"}]}
+
+    result = await asyncio.to_thread(_bridged_execute(nested_list), {}, None)
+    assert isinstance(result, dict) and result["isError"] is True
+    assert "nested list failure" in result["content"][0]["text"]
+
+
 async def test_custom_tool_execute_times_out_to_iserror(monkeypatch: pytest.MonkeyPatch) -> None:
     """A tool that never completes must not block the daemon thread forever — the
     bounded wait surfaces a timeout tool error instead of hanging."""
