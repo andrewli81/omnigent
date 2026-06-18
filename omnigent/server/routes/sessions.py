@@ -8886,7 +8886,8 @@ def _agent_is_native(agent: Agent) -> bool:
 
     Loads the agent's spec to read its ``harness_kind``. Native targets run
     a vendor TUI in a terminal (claude-native / codex-native / pi-native /
-    cursor-native). This is broader than "can replay fork history"; use
+    cursor-native). This is broader than "can replay fork history" — only
+    claude/codex native carry the transcript-rebuild path; use
     ``_agent_carries_native_fork_history`` for that narrower gate. Returns
     ``False`` when the bundle can't be loaded (treated as non-native).
 
@@ -8904,6 +8905,16 @@ def _agent_is_native(agent: Agent) -> bool:
     except Exception:  # noqa: BLE001 — unloadable bundle → treat as non-native
         return False
     return is_native_harness(spec.executor.harness_kind)
+
+
+# Native harnesses that record a resumable session and can rebuild a fork's
+# transcript from copied Omnigent items. Both spellings are listed because
+# canonicalize_harness passes the reversed native ids through unchanged (only
+# "native-pi" is aliased) — same reasoning as model_override._CLAUDE_FAMILY_HARNESSES.
+# cursor/pi native are intentionally absent: they can't replay fork history.
+_FORK_HISTORY_NATIVE_HARNESSES: frozenset[str] = frozenset(
+    {"claude-native", "native-claude", "codex-native", "native-codex"}
+)
 
 
 def _agent_carries_native_fork_history(agent: Agent) -> bool:
@@ -8930,7 +8941,7 @@ def _agent_carries_native_fork_history(agent: Agent) -> bool:
         )
     except Exception:  # noqa: BLE001 — unloadable bundle → treat as non-carrying
         return False
-    return canonicalize_harness(spec.executor.harness_kind) in {"claude-native", "codex-native"}
+    return canonicalize_harness(spec.executor.harness_kind) in _FORK_HISTORY_NATIVE_HARNESSES
 
 
 def _native_coding_agent_for_agent(agent: Agent) -> NativeCodingAgent | None:
