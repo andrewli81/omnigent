@@ -3292,7 +3292,7 @@ def _fake_sessions_chat_cls(
         async def query(self, prompt: str) -> object:
             return await query_impl(prompt)
 
-        async def await_turn(self, *, timeout: float | None = None) -> QueryResult:  # noqa: ARG002
+        async def await_turn(self, *, timeout: float | None = None) -> QueryResult:
             if self._pending:
                 text = self._pending.pop(0)
                 if not self._pending:
