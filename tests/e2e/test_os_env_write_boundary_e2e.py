@@ -118,8 +118,7 @@ def _register_guarded_agent(
         model=model,
         profile="",
         prompt=(
-            "You are a coding assistant. Use sys_os_write to create files "
-            "exactly as instructed."
+            "You are a coding assistant. Use sys_os_write to create files exactly as instructed."
         ),
         # openai-agents: /v1-suffixed URL (the OpenAI SDK appends /responses).
         mock_llm_base_url=f"{mock_llm_server_url}/v1",
