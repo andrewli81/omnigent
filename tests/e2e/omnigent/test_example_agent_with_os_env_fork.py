@@ -25,7 +25,7 @@ from tests.e2e.omnigent._example_helpers import (
     assert_completed_one_shot,
     run_one_shot,
 )
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 
 def test_agent_with_os_env_fork_one_shot(
@@ -56,6 +56,7 @@ def test_agent_with_os_env_fork_one_shot(
     fork_demo.mkdir(exist_ok=True)
     (fork_demo / "notes.txt").write_text("original content\n")
 
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(mock_llm_server_url, [{"text": "OK"}])
     result = run_one_shot(
         omnigent_python=omnigent_python,

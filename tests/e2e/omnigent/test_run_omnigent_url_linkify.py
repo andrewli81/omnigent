@@ -52,7 +52,7 @@ from tests.e2e.omnigent._pexpect_harness import (
     spawn_omnigent_run,
     submit_prompt,
 )
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 # A deliberately distinctive URL the agent will echo — picked
 # so the OSC 8 byte sequence containing it can be unambiguously
@@ -154,6 +154,7 @@ def test_run_omnigent_url_linkify_emits_osc_8_in_pty(
     """
     # Turn 1: LLM calls sys_os_shell to echo the URL.
     # Turn 2: LLM acknowledges with DONE.
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(
         mock_llm_server_url,
         [

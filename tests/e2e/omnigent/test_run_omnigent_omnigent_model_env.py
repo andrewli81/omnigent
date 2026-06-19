@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 from tests.e2e._run_with_group_timeout import run_with_group_timeout
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 # ``databricks-`` prefix is load-bearing on two counts:
 # 1. ``databricks-`` exempts ``llm.connection`` from
@@ -131,6 +131,7 @@ def test_omnigent_model_env_var_drives_successful_run(
     :param mock_llm_server_url: Mock server URL for configuring queues.
     :param tmp_path: Per-test tmp dir for the minimal YAML.
     """
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(mock_llm_server_url, [{"text": "hi there"}])
     result = _run_omnigent_with_model_env(
         model_env_value=_VALID_MODEL,
@@ -188,6 +189,7 @@ def test_omnigent_model_env_var_bogus_value_fails_with_named_error(
     # names the model; if the env var is silently dropped, the
     # default queue fires a success response and the test fails
     # on the ``returncode != 0`` assertion below.
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(
         mock_llm_server_url,
         [

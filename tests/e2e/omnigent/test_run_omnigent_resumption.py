@@ -46,7 +46,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 # ``openai-agents`` is picked because it honors
 # ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY`` directly — no
@@ -242,6 +242,7 @@ def test_run_omnigent_continue_carries_history_across_invocations(
     nonce = _make_nonce()
     # Run #1: mock returns nonce. Run #2 (--continue): mock
     # returns nonce again, simulating recall from history.
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(mock_llm_server_url, [{"text": nonce}, {"text": nonce}])
 
     # Run #1: plant the nonce. Use a deliberately-rigid
@@ -421,6 +422,7 @@ def test_run_omnigent_continue_works_across_oneshot_and_interactive_paths(
     nonce = _make_nonce()
     # Plant: mock returns nonce. Recover (--continue): mock returns
     # nonce again simulating history-aware recall.
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(mock_llm_server_url, [{"text": nonce}, {"text": nonce}])
 
     # Step 1: plant the nonce via -p.
@@ -543,6 +545,7 @@ def test_run_omnigent_session_id_pins_the_specific_conversation(
     nonce_b = _make_nonce()
     persistent_db = fake_home / ".omnigent" / "chat.db"
     # 4 LLM calls: plant A, plant B, recall A (--resume convA), recall B (--resume convB).
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(
         mock_llm_server_url,
         [

@@ -28,7 +28,7 @@ from tests.e2e.omnigent._example_helpers import (
     assert_completed_one_shot,
     run_one_shot,
 )
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 _PROMPT = "Start worker session alpha and ask it to calculate 2 + 2."
 
@@ -55,6 +55,7 @@ def test_agent_with_subagent_session_one_shot(
     """
     # The supervisor may make a tool call then get a follow-up
     # response. Provide several mock responses to cover multi-turn.
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(
         mock_llm_server_url,
         [

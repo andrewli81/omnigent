@@ -24,7 +24,7 @@ from tests.e2e.omnigent._example_helpers import (
     assert_completed_one_shot,
     run_one_shot,
 )
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 # Low-token summary request so the policy's rate limit stays
 # comfortably unrehced — the goal is to exercise the hook, not
@@ -51,6 +51,7 @@ def test_rate_limited_search_agent_one_shot(
     :param mock_llm_server_url: Mock server URL for configuring
         response queues.
     """
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(
         mock_llm_server_url,
         [{"text": "The sky is blue due to Rayleigh scattering of sunlight."}],

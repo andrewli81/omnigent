@@ -24,7 +24,7 @@ from tests.e2e.omnigent._pexpect_harness import (
     wait_for_ready,
 )
 from tests.e2e.omnigent._snapshot import compare_snapshot
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 _MODEL = "mock-model"
 _HARNESS = "openai-agents"
@@ -64,6 +64,7 @@ def test_repl_multiline_ctrl_j_insert(
     :param mock_llm_server_url: Mock server URL for configuring
         response queues.
     """
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(
         mock_llm_server_url,
         [{"text": "I received your multi-line input."}],

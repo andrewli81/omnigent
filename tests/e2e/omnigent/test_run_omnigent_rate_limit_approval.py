@@ -121,12 +121,13 @@ def test_run_omnigent_rate_limit_approval_round_trip(
     :param mock_llm_server_url: Mock server URL for configuring
         response queues.
     """
-    from tests.e2e.omnigent.conftest import configure_mock_llm
+    from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
     # Issue 4 search_web tool calls in sequence (3 allowed, 4th hits ASK).
     # After each tool result the mock server needs another response.
     # Sequence: call 1 → call 2 → call 3 → call 4 (ASK fires here,
     # approval is typed by the test, then call 4 runs) → final text.
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(
         mock_llm_server_url,
         [

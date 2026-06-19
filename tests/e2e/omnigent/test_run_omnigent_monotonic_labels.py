@@ -62,7 +62,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 # Same harness as the other run_omnigent e2e tests — the
 # invariant under test is on the policy + label-store path,
@@ -126,6 +126,7 @@ def test_monotonic_decreasing_constraint_enforced_end_to_end(
         sees ``current=None`` and the rogue write is allowed
         (also "1" persisted).
     """
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(mock_llm_server_url, [{"text": "ok"}])
     fake_home = tmp_path / "home"
     fake_home.mkdir()
@@ -298,6 +299,7 @@ def test_monotonic_increasing_picks_most_restrictive_in_one_evaluation(
         data race in YAML order — one silently nullifies the
         other depending on file ordering.
     """
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(mock_llm_server_url, [{"text": "ok"}])
     fake_home = tmp_path / "home"
     fake_home.mkdir()

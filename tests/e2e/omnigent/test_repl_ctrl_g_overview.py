@@ -25,7 +25,7 @@ from tests.e2e.omnigent._pexpect_harness import (
 )
 from tests.e2e.omnigent._repl_test_helpers import drain_for
 from tests.e2e.omnigent._snapshot import compare_snapshot
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 _MODEL = "mock-model"
 _HARNESS = "openai-agents"
@@ -66,6 +66,7 @@ def test_repl_ctrl_g_overview_toggle(
     :param mock_llm_server_url: Mock server URL for configuring
         response queues.
     """
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(mock_llm_server_url, [{"text": "ok"}])
     yaml_path = omnigent_repo_root / "tests" / "resources" / "examples" / "hello_world.yaml"
 

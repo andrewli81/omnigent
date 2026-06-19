@@ -39,7 +39,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 _ONESHOT_TIMEOUT_SEC = 240
 
@@ -167,6 +167,7 @@ def test_run_omnigent_example_yaml(
     # Configure the mock LLM to return the first success marker
     # so the assertion below passes deterministically.
     mock_text = success_markers[0] if success_markers else "ok"
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(mock_llm_server_url, [{"text": mock_text}])
 
     args = [

@@ -44,7 +44,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 _TIMEOUT_SEC = 180
 
@@ -348,6 +348,7 @@ def test_policy_denies_tool_call_by_name(
     # Turn 1: LLM emits a calculate tool call → policy intercepts
     # and returns DENY sentinel as tool output.
     # Turn 2: LLM sees DENY sentinel and acknowledges the denial.
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(
         mock_llm_server_url,
         [

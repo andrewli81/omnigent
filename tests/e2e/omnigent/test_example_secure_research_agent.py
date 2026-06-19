@@ -23,7 +23,7 @@ from tests.e2e.omnigent._example_helpers import (
     assert_completed_one_shot,
     run_one_shot,
 )
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 
 def test_secure_research_agent_one_shot(
@@ -46,6 +46,7 @@ def test_secure_research_agent_one_shot(
     :param mock_llm_server_url: Mock server URL for configuring
         response queues.
     """
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(mock_llm_server_url, [{"text": "OK"}])
     result = run_one_shot(
         omnigent_python=omnigent_python,

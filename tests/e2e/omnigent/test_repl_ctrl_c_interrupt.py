@@ -52,7 +52,7 @@ from tests.e2e.omnigent._pexpect_harness import (
     submit_prompt,
 )
 from tests.e2e.omnigent._snapshot import compare_snapshot
-from tests.e2e.omnigent.conftest import configure_mock_llm
+from tests.e2e.omnigent.conftest import configure_mock_llm, reset_mock_llm
 
 # Visible turn-synchronization markers (see test_repl_smoke).
 # ``working`` is the streaming activity line; ``❯ `` is the idle
@@ -139,6 +139,7 @@ def test_repl_cancel_re_arms_for_next_turn(
     # may land after the turn finishes. Either way, the follow-up
     # turn exercises the re-arm path. Second response is the
     # follow-up turn.
+    reset_mock_llm(mock_llm_server_url)
     configure_mock_llm(
         mock_llm_server_url,
         [
