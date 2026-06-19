@@ -69,6 +69,11 @@ _HARNESS_MODULES: dict[str, str] = {
     "kimi": "omnigent.inner.kimi_harness",
     # User-facing alias matching the upstream product name ("Kimi Code").
     "kimi-code": "omnigent.inner.kimi_harness",
+    # cursor-native harness wrap. Drives the resident ``cursor-agent`` TUI by
+    # injecting each web-UI turn into its tmux pane and mirroring the transcript
+    # back — a native-CLI harness like claude/codex/pi-native, so it IS in
+    # ``NATIVE_HARNESSES``. See omnigent/inner/cursor_native_harness.py.
+    "cursor-native": "omnigent.inner.cursor_native_harness",
     # Google Antigravity SDK harness wrap. See
     # omnigent/inner/antigravity_harness.py. In-process SDK harness
     # (``google-antigravity``), like openai-agents — Omnigent spawns no CLI
@@ -76,14 +81,6 @@ _HARNESS_MODULES: dict[str, str] = {
     # localharness binary; needs glibc >=~2.36). Drives Gemini 3.5 Flash by
     # default (also Claude / GPT-OSS), with Gemini API-key or Vertex AI auth.
     "antigravity": "omnigent.inner.antigravity_harness",
-    # Supervisor harness wrap. See
-    # omnigent/inner/databricks_supervisor_harness.py. Drives the Databricks
-    # Agent Bricks Supervisor API at
-    # ``{workspace}/ai-gateway/mlflow/v1/responses``. Differs from
-    # the SDK-wrapping harnesses above in that the inner executor
-    # has no third-party SDK dependency — it talks HTTP / SSE
-    # directly to the Databricks gateway.
-    "databricks_supervisor": "omnigent.inner.databricks_supervisor_harness",
 }
 
 __all__ = ["_HARNESS_MODULES"]
