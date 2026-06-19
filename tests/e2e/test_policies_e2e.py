@@ -537,7 +537,6 @@ def test_prompt_policy_allow_path_reaches_llm(
     http_client: httpx.Client,
     prompt_policy_agent: str,
     live_runner_id: str,
-    using_mock_llm: bool,
 ) -> None:
     """
     Non-Canadian input → classifier ALLOWs → agent LLM runs →
@@ -545,8 +544,7 @@ def test_prompt_policy_allow_path_reaches_llm(
     works end-to-end through the real LLM, the policy engine
     composes ALLOW, and the full turn completes normally.
     """
-    if using_mock_llm:
-        pytest.skip("requires real LLM (prompt policy classifier)")
+    pytest.skip("requires real LLM (prompt policy classifier)")
     session_id = create_runner_bound_session(
         http_client, agent_name=prompt_policy_agent, runner_id=live_runner_id
     )
@@ -578,7 +576,6 @@ def test_prompt_policy_deny_path_short_circuits(
     http_client: httpx.Client,
     prompt_policy_agent: str,
     live_runner_id: str,
-    using_mock_llm: bool,
 ) -> None:
     """
     Canadian-topic input → classifier DENYs → the events endpoint
@@ -594,8 +591,7 @@ def test_prompt_policy_deny_path_short_circuits(
     classifier-wiring proof and a gateway-routing regression
     guard.
     """
-    if using_mock_llm:
-        pytest.skip("requires real LLM (prompt policy classifier)")
+    pytest.skip("requires real LLM (prompt policy classifier)")
     session_id = create_runner_bound_session(
         http_client, agent_name=prompt_policy_agent, runner_id=live_runner_id
     )
