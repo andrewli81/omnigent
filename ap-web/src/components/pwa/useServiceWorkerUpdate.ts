@@ -34,6 +34,11 @@ function publish(needRefresh: boolean): void {
 function start(): void {
   if (started) return;
   started = true;
+  // No service worker in dev: `sw.js` is only emitted by the production build, so
+  // in dev the path resolves to the index.html SPA fallback (wrong MIME) and
+  // registration would fail — and a dev SW fights HMR anyway. Standard PWA
+  // practice; vite-plugin-pwa keeps its dev service worker off for the same reason.
+  if (!import.meta.env.PROD) return;
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
 
   workbox = new Workbox("/sw.js");

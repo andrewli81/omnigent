@@ -157,16 +157,31 @@ const PWA_MANIFEST = {
  * (`computeBuildVersion`). That fingerprint makes `sw.js` change on every
  * code/style deploy, which is what fires the in-app update prompt. Registered
  * ONLY here (not in `vite.embed.config.ts`), so the embed island ships neither
- * a service worker nor a manifest. `apply: "build"` keeps `npm run dev`
- * service-worker-free.
+ * a service worker nor a manifest.
+ *
+ * In dev, `generateBundle` doesn't run, so the dev server serves the manifest
+ * via middleware (otherwise the `index.html` link 404s) — but no `sw.js`: there
+ * is deliberately no service worker in dev (see `useServiceWorkerUpdate`).
  */
 function emitPwaAssets(): Plugin {
   return {
     name: "emit-pwa-assets",
-    apply: "build",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url !== "/manifest.webmanifest") return next();
+        res.setHeader("Content-Type", "application/manifest+json");
+        res.end(JSON.stringify(PWA_MANIFEST));
+      });
+    },
     generateBundle(_options, bundle) {
       const build = computeBuildVersion(Object.keys(bundle));
       const swSource = readFileSync(path.resolve(__dirname, "sw-src/sw.js"), "utf8");
+      // Fail the build loudly rather than ship a service worker with no
+      // per-build fingerprint — a missing token would silently leave `sw.js`
+      // byte-identical across deploys, so the update prompt would never fire.
+      if (!swSource.includes("__BUILD_VERSION__")) {
+        this.error("sw-src/sw.js is missing the __BUILD_VERSION__ token; cannot fingerprint sw.js");
+      }
       this.emitFile({
         type: "asset",
         fileName: "version.json",
@@ -180,7 +195,9 @@ function emitPwaAssets(): Plugin {
       this.emitFile({
         type: "asset",
         fileName: "sw.js",
-        source: swSource.replace("__BUILD_VERSION__", build),
+        // replaceAll (not replace): if a second reference to the token is ever
+        // added, replace() would leave it raw and break the cache name.
+        source: swSource.replaceAll("__BUILD_VERSION__", build),
       });
     },
   };

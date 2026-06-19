@@ -560,22 +560,29 @@ def _assert_pwa_build(build_output: Path) -> None:
             f"sw.js precaches an app-shell asset ({shell_precache.group(0)}) — "
             "it must precache only version.json"
         )
-    # The architecture rests on "navigations always hit the network": the SW may
-    # call respondWith() ONLY in the /version.json branch. A fetch handler that
-    # serves navigations (or the shell) from cache would pass every check above
-    # yet white-screen users behind a stale shell after each deploy — so guard it
-    # both by marker and structurally (every respondWith must be /version.json's).
+    # The architecture rests on "navigations always hit the network". Enforce it
+    # by marker AND structurally: the SW must call respondWith() exactly once,
+    # inside the /version.json branch. A fetch handler that serves navigations or
+    # the shell from cache would pass every check above yet white-screen users
+    # behind a stale shell after each deploy.
     if re.search(r"request\.mode|NavigationRoute|navigationPreload", sw_code):
         pytest.fail(
             "sw.js inspects navigation requests — navigations must always reach "
             "the network (a stale cached shell white-screens users after a deploy)"
         )
-    for match in re.finditer(r"respondWith", sw_code):
-        if "version.json" not in sw_code[max(0, match.start() - 200) : match.start()]:
-            pytest.fail(
-                "sw.js calls respondWith() outside a /version.json branch — the "
-                "service worker must not serve the app shell or intercept navigations"
-            )
+    responders = sw_code.count("respondWith")
+    if responders != 1:
+        pytest.fail(
+            f"sw.js has {responders} respondWith() call(s); expected exactly 1 (the "
+            "/version.json sentinel). Any other responder risks serving a stale shell."
+        )
+    # The single respondWith must sit inside the `=== "/version.json"` block —
+    # i.e. no `}` (block close) between the pathname check and the respondWith.
+    if not re.search(r'"/version\.json"[^}]*?respondWith', sw_code, re.DOTALL):
+        pytest.fail(
+            "sw.js's respondWith() is not guarded by a `/version.json` pathname "
+            "check — the service worker must not serve the shell or intercept navigations"
+        )
 
 
 @pytest.fixture(scope="session")

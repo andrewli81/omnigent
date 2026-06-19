@@ -30,6 +30,8 @@ let reloadSpy: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   // Reset the hook's module-level singleton between tests.
   vi.resetModules();
+  // The hook only registers the SW in production builds; tests run in dev mode.
+  vi.stubEnv("PROD", true);
   FakeWorkbox.instances.length = 0;
   // The hook early-returns in jsdom (no navigator.serviceWorker) — provide one.
   Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: {} });
@@ -39,6 +41,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
 });
 
 // Import RTL and the hook together AFTER resetModules so both share one fresh

@@ -41,6 +41,15 @@ def test_embed_build_ships_no_service_worker(built_spa: None, tmp_path: Path) ->
         cwd=_AP_WEB_DIR,
         check=True,
     )
+    # Guard against a vacuous pass: if the `--outDir` override is ever dropped
+    # (e.g. the `build:embed` script stops forwarding extra args), the build
+    # lands elsewhere, `out` is empty, and the leak check below trivially passes
+    # while testing nothing. Require the build to have actually emitted here.
+    emitted = [p.name for p in out.rglob("*") if p.is_file()]
+    assert emitted, (
+        f"embed build produced no files in {out} — the --outDir override was not "
+        "honored, so the no-service-worker/manifest assertion would pass vacuously"
+    )
     leaked = sorted(
         p.name
         for p in out.rglob("*")
