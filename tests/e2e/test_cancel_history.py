@@ -17,6 +17,7 @@ import uuid
 from typing import Any
 
 import httpx
+import pytest
 
 from tests.e2e.conftest import (
     configure_mock_llm,
@@ -353,6 +354,78 @@ def test_cancel_mid_response_followup_succeeds(
     )
     assert followup_body["status"] == "completed", (
         f"Follow-up after cancel failed: "
+        f"status={followup_body['status']!r}, "
+        f"error={followup_body.get('error')}"
+    )
+
+
+def test_cancel_mid_tool_call_followup_succeeds(
+    http_client: httpx.Client,
+    archer_agent: str,
+    live_runner_id: str,
+    using_mock_llm: bool,
+) -> None:
+    """
+    Cancel a response while tools are executing, then verify the
+    follow-up turn succeeds (doesn't fail with 400).
+
+    When a response is cancelled mid-tool-call, dangling
+    ``function_call`` items exist without matching
+    ``function_call_output``. The cancellation handler must inject
+    synthetic outputs for these, otherwise OpenAI rejects the next
+    turn with "No tool output found for function call".
+
+    **What breaks if wrong:**
+
+    - If synthetic function_call_output items are not inserted,
+      every subsequent message in the conversation fails with
+      ``[llm] failed``.
+    """
+    if using_mock_llm:
+        pytest.skip(
+            "cancel-mid-tool-call requires real tool execution (web_search) "
+            "that the mock LLM cannot orchestrate"
+        )
+
+    # Step 1: open session; ask archer to use tools (web_search triggers tool calls).
+    session_id = create_runner_bound_session(
+        http_client, agent_name=archer_agent, runner_id=live_runner_id
+    )
+    send_user_message_to_session(
+        http_client,
+        session_id=session_id,
+        content=(
+            "Search the web for 'latest Python release date' "
+            "and then search for 'latest Rust release date'. "
+            "Report both results."
+        ),
+    )
+
+    # Step 2: wait for running (tools should be executing), cancel.
+    _wait_for_session_running(http_client, session_id, timeout=60)
+    # Brief delay so tool calls are persisted.
+    time.sleep(2)
+    cancel_resp = http_client.post(f"/v1/sessions/{session_id}/events", json={"type": "interrupt"})
+    cancel_resp.raise_for_status()
+    assert cancel_resp.status_code in (202, 204)
+    _wait_for_idle(http_client, session_id)
+
+    # Step 3: follow-up in the same session — would fail with 400 before the fix.
+    followup_id = send_user_message_to_session(
+        http_client,
+        session_id=session_id,
+        content="Never mind the search. Just say hello.",
+    )
+
+    followup_body = poll_session_until_terminal(
+        http_client,
+        session_id=session_id,
+        response_id=followup_id,
+        timeout=120,
+    )
+    # The follow-up must complete, not fail with an LLM error.
+    assert followup_body["status"] == "completed", (
+        f"Follow-up after tool-call cancel failed: "
         f"status={followup_body['status']!r}, "
         f"error={followup_body.get('error')}"
     )
