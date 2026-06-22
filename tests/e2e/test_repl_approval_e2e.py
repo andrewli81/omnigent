@@ -1607,7 +1607,16 @@ def test_repl_subagent_tool_call_ask_does_not_tunnel_banner_to_root(
     worker_reply = "worker-reply-render-marker"
     parent_summary = "parent-summary-render-marker"
     reset_mock_llm(mock_llm_server_url)
-    # Parent queue (model gpt-4o): spawn toolworker, then summarize.
+    # Both queues are content-routed on DISTINCT, mutually-non-substring
+    # tokens so parent and sub-agent calls split correctly AND neither
+    # queue is reachable by model fallback (closes the gpt-4o / gpt-4o-mini
+    # contamination vectors entirely — #523 isolation):
+    #   - "statool-parent" appears ONLY in the root user message, so the
+    #     parent's calls (and its post-spawn continuation) route here. The
+    #     delegated-task token lives in a function_call, not user content,
+    #     so it never leaks into the parent's user text.
+    #   - "statool-worker" appears ONLY in the task delegated to the
+    #     toolworker, so the sub-agent's calls route to its own queue.
     configure_mock_llm(
         mock_llm_server_url,
         [
@@ -1617,7 +1626,11 @@ def test_repl_subagent_tool_call_ask_does_not_tunnel_banner_to_root(
                         "call_id": "sa1",
                         "name": "sys_session_send",
                         "arguments": json.dumps(
-                            {"agent": "toolworker", "title": "t", "args": "return the word durian"}
+                            {
+                                "agent": "toolworker",
+                                "title": "t",
+                                "args": "return the word durian statool-worker",
+                            }
                         ),
                     }
                 ]
@@ -1626,16 +1639,9 @@ def test_repl_subagent_tool_call_ask_does_not_tunnel_banner_to_root(
             {"text": "(spare)"},
             {"text": "(spare)"},
         ],
-        # Content-route the PARENT queue on a token that appears ONLY in
-        # the root user message — not in the delegated task the
-        # sub-agent receives ("return the word durian") — so the parent's
-        # calls hit this queue while the toolworker's calls fall through
-        # to its own model-keyed queue below. Dropping the "gpt-4o" model
-        # key also means a stray gpt-4o request from another test no
-        # longer lands here via model fallback (#523 isolation).
-        match="subagent-tool",
+        match="statool-parent",
     )
-    # Toolworker queue (model gpt-4o-mini): call echo, then reply.
+    # Toolworker queue — content-routed on the delegated-task token.
     configure_mock_llm(
         mock_llm_server_url,
         [
@@ -1652,7 +1658,7 @@ def test_repl_subagent_tool_call_ask_does_not_tunnel_banner_to_root(
             {"text": "(spare)"},
             {"text": "(spare)"},
         ],
-        key="gpt-4o-mini",
+        match="statool-worker",
     )
     child = pexpect.spawn(
         ap_cli,
@@ -1669,7 +1675,7 @@ def test_repl_subagent_tool_call_ask_does_not_tunnel_banner_to_root(
             timeout=90,
             welcome_pattern="e2e.subagent.tool.gate",
         )
-        child.send("return the word durian subagent-tool" + "\r")
+        child.send("return the word durian statool-parent" + "\r")
         # Deterministic content-marker sync: the parent's summary text
         # renders only after the sub-agent ran echo end-to-end and its
         # result landed in the inbox. Keying on the marker (not the

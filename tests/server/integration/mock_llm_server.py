@@ -616,12 +616,22 @@ class MockState:
 
     @staticmethod
     def _user_input_text(parsed: object) -> str:
-        """Concatenate the text of all ``role="user"`` items in the request input.
+        """Concatenate the text of all ``role="user"`` items in the request.
+
+        Endpoint-agnostic: reads BOTH the Responses-API ``input`` array
+        (``/v1/responses``) AND the ``messages`` array used by the
+        Anthropic Messages (``/v1/messages``) and OpenAI Chat
+        (``/v1/chat/completions``) endpoints — so content routing behaves
+        identically no matter which endpoint ``resolve_queue_for_request``
+        is called from, rather than silently degrading to model routing
+        for ``messages``-shaped requests.
 
         Scoped to user-role content deliberately — NOT the system prompt
-        (``instructions``) or tool outputs — so a content-routing token
-        only ever matches what the test itself typed, never incidental
-        words in a shared system prompt.
+        (``instructions`` / ``system``) or tool outputs — so a
+        content-routing token only ever matches what the test itself
+        typed, never incidental words in a shared system prompt. Content
+        may be a plain string or a list of ``{"type","text"}`` blocks
+        (both the Responses and Messages shapes), so both are walked.
 
         :param parsed: The parsed request body.
         :returns: Space-joined user message text (``""`` if none).
@@ -629,16 +639,20 @@ class MockState:
         if not isinstance(parsed, dict):
             return ""
         parts: list[str] = []
-        for item in parsed.get("input") or []:
-            if not isinstance(item, dict) or item.get("role") != "user":
-                continue
-            content = item.get("content")
-            if isinstance(content, str):
-                parts.append(content)
-            elif isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict):
-                        parts.append(str(block.get("text", "")))
+        # ``input`` (Responses API) and ``messages`` (Anthropic / Chat)
+        # are mutually exclusive in practice, but walk both so the helper
+        # is correct for every endpoint that routes through it.
+        for key in ("input", "messages"):
+            for item in parsed.get(key) or []:
+                if not isinstance(item, dict) or item.get("role") != "user":
+                    continue
+                content = item.get("content")
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            parts.append(str(block.get("text", "")))
         return " ".join(parts)
 
     def resolve_queue_for_request(self, parsed: object) -> _ResponseQueue:
@@ -650,14 +664,26 @@ class MockState:
         ``model`` / ``"default"`` routing, so tests that don't opt in are
         unaffected.
 
+        When several match-queues are live at once (e.g. a sub-agent test
+        with distinct parent/worker queues), the LONGEST matching token
+        wins — deterministic regardless of dict order, and robust if one
+        token is a substring of another. Tests should still pick mutually
+        non-substring tokens; longest-match is a safety net, not a
+        license to overlap.
+
         :param parsed: The parsed request body.
         :returns: The selected response queue.
         """
         user_text = self._user_input_text(parsed)
         if user_text:
+            best: _ResponseQueue | None = None
             for queue in self.queues.values():
-                if queue.match and queue.match in user_text:
-                    return queue
+                if queue.match and queue.match in user_text and (
+                    best is None or len(queue.match) > len(best.match or "")
+                ):
+                    best = queue
+            if best is not None:
+                return best
         model = parsed.get("model") if isinstance(parsed, dict) else None
         return self.resolve_queue(model)
 
