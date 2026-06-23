@@ -150,12 +150,23 @@ def test_opencode_native_host_session_auto_creates_terminal(
         # The runner's _auto_create_opencode_terminal must register the TUI on
         # session creation (the dispatch branch this PR adds alongside the other
         # natives) — otherwise the Web UI would have no terminal to attach to.
+        terminal_id = terminal_resource_id("opencode", "main")
         _poll_for_terminal(
             http_client,
             session_id=session_id,
-            resource_id=terminal_resource_id("opencode", "main"),
+            resource_id=terminal_id,
             timeout=90.0,
         )
+        # The `omnigent opencode` CLI launcher attaches this TTY directly to the
+        # runner-owned tmux pane, so the terminal resource must expose the tmux
+        # socket + target — assert that prerequisite is present.
+        detail = http_client.get(
+            f"/v1/sessions/{session_id}/resources/terminals/{terminal_id}"
+        )
+        detail.raise_for_status()
+        meta = detail.json().get("metadata", {})
+        assert meta.get("tmux_socket"), f"terminal has no tmux_socket: {meta}"
+        assert meta.get("tmux_target"), f"terminal has no tmux_target: {meta}"
     finally:
         daemon.terminate()
         try:

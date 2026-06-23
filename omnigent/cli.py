@@ -4318,6 +4318,103 @@ def codex(
     default=None,
     help=(
         "Remote omnigent URL. Ensures the host daemon, asks the "
+        "daemon-spawned runner to launch OpenCode, and attaches this TTY. "
+        'Pass --server "" to auto-spawn a persistent local server in the '
+        "background and use that instead of a remote one."
+    ),
+)
+@click.option(
+    "-r",
+    "--resume",
+    "resume",
+    is_flag=False,
+    flag_value=_RESUME_PICKER_SENTINEL,
+    default=None,
+    help=(
+        "Resume a prior Omnigent conversation. With a conversation id "
+        "(e.g. ``--resume conv_abc123``) attaches directly; with no value "
+        "opens an interactive picker scoped to opencode-native sessions."
+    ),
+)
+@click.option(
+    "--session",
+    "session_id",
+    metavar="SESSION_ID",
+    default=None,
+    hidden=True,
+    help="Deprecated alias for ``--resume <id>``; kept for one release.",
+)
+@click.option("--model", default=None, help="OpenCode model to use for the native session.")
+@click.argument("opencode_args", nargs=-1, type=click.UNPROCESSED)
+def opencode(
+    server: str | None,
+    resume: str | None,
+    session_id: str | None,
+    model: str | None,
+    opencode_args: tuple[str, ...],
+) -> None:
+    # :param server: Remote Omnigent server URL, or None for local.
+    # :param resume: None, picker sentinel, or a conversation id.
+    # :param session_id: Legacy ``--session`` id; mutually exclusive with ``--resume``.
+    # :param model: OpenCode model id pinned on the wrapper spec.
+    # :param opencode_args: Pass-through args persisted for the ``opencode attach`` TUI.
+    """Launch OpenCode TUI in an Omnigent terminal.
+
+    \b
+    Examples:
+      omnigent opencode
+      omnigent opencode --resume conv_abc123
+      omnigent opencode --resume                  # interactive picker
+      omnigent opencode --server https://<app>.databricksapps.com
+    """
+    from omnigent.opencode_native import run_opencode_native
+
+    cfg = _load_effective_config()
+    if server is None:
+        server = cfg.get("server")
+    if model is None:
+        model = cfg.get("model")
+    auto_open_conversation = _resolve_auto_open_conversation_from_config(cfg)
+
+    # Validate option combinations before any side effects (see the codex
+    # command): _ensure_backend can spawn the daemon and take the full
+    # local-server-discover timeout, which would mask a bad arg pair as an
+    # outage instead of a usage error.
+    choice = _split_resume_value(resume)
+    if session_id is not None and (choice.picker or choice.conversation_id is not None):
+        raise click.UsageError(
+            "--session and --resume are mutually exclusive; "
+            "prefer --resume (--session is deprecated).",
+        )
+
+    # Ensure the host daemon (local when ``--server`` is omitted/empty, remote
+    # otherwise); the daemon-spawned runner owns ``opencode serve`` + the TUI,
+    # and this CLI attaches to the tmux terminal.
+    server = _ensure_backend(server)
+    resolved_session_id = (
+        choice.conversation_id if choice.conversation_id is not None else session_id
+    )
+    run_opencode_native(
+        server=server,
+        session_id=resolved_session_id,
+        resume_picker=choice.picker,
+        opencode_args=opencode_args,
+        model=model,
+        auto_open_conversation=auto_open_conversation,
+    )
+
+
+@cli.command(
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+    }
+)
+@click.option(
+    "--server",
+    default=None,
+    help=(
+        "Remote omnigent URL. Ensures the host daemon, asks the "
         "daemon-spawned runner to launch Pi, and attaches this TTY. "
         'Pass --server "" to auto-spawn a persistent local server in the '
         "background and use that instead of a remote one."
@@ -5069,6 +5166,12 @@ def _dispatch_native_terminal_harness(
         from omnigent.cursor_native import run_cursor_native
 
         run_cursor_native(cursor_args=passthrough, **common)
+    elif native_agent.key == "opencode":
+        from omnigent.opencode_native import run_opencode_native
+
+        # OpenCode pins its model on the wrapper spec (like Codex), so it takes
+        # ``model`` first-class rather than via a ``--model`` passthrough arg.
+        run_opencode_native(opencode_args=(), model=model, **common)
     else:  # pragma: no cover - new native agent added without a dispatch arm
         raise click.ClickException(f"No native terminal launcher wired for harness {harness!r}.")
     return True

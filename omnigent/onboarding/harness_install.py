@@ -123,7 +123,11 @@ _HARNESS_INSTALL: dict[str, HarnessInstallSpec] = {
         status_args=("login", "status"),
     ),
     PI_KEY: HarnessInstallSpec("Pi", "pi", "@earendil-works/pi-coding-agent"),
-    OPENCODE_KEY: HarnessInstallSpec("OpenCode", "opencode", "opencode-ai"),
+    # Pin the install to the supported 1.17.x range: opencode-ai's npm ``latest``
+    # is a ``0.0.0-beta-*`` pre-release, so a bare ``opencode-ai`` would install a
+    # version the runtime version-check (``check_opencode_version``,
+    # >=1.17.7,<1.18.0) then rejects. ``~1.17.7`` mirrors that exact range.
+    OPENCODE_KEY: HarnessInstallSpec("OpenCode", "opencode", "opencode-ai@~1.17.7"),
     QWEN_KEY: HarnessInstallSpec(
         "Qwen Code",
         "qwen",
