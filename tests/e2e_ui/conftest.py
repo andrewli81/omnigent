@@ -2167,7 +2167,10 @@ def _temp_omnigent_mock_config(
         ``"http://127.0.0.1:51235"``. No /v1 suffix — each SDK appends it.
     :param harness: ``"claude"`` or ``"codex"``.
     """
-    config_dir = Path.home() / ".omnigent"
+    # Respect OMNIGENT_CONFIG_HOME (same logic as provider_config._config_path)
+    # so the mock config lands where the runner actually reads it.
+    config_home = os.environ.get("OMNIGENT_CONFIG_HOME")
+    config_dir = Path(config_home) if config_home else Path.home() / ".omnigent"
     config_path = config_dir / "config.yaml"
     config_dir.mkdir(parents=True, exist_ok=True)
     original = config_path.read_text() if config_path.exists() else None

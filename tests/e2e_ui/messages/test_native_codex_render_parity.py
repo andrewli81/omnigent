@@ -26,7 +26,7 @@ import uuid
 import pytest
 from playwright.sync_api import Page, expect
 
-from tests.e2e_ui.conftest import configure_mock_llm, reset_mock_llm, set_fallback_mock_llm
+from tests.e2e_ui.conftest import reset_mock_llm, set_fallback_mock_llm
 
 # Reuse the custom-agent suite's helpers — both surfaces render from the same
 # canonical transcript, so parity / dedup / ordering are asserted identically.
@@ -122,16 +122,13 @@ def test_native_codex_message_render_parity(
         (f"usr-{i + 1}-{nonces[i]}", f"ast-{i + 1}-{nonces[i]}")
         for i in range(_COMPOSER_TURNS + 1)
     ]
+    # Content-routing doesn't work for native CLIs that send full conversation
+    # history — earlier markers appear in later turns' requests. FIFO also
+    # fails because the CLI makes internal LLM calls (tool schema, etc.)
+    # before the first user turn, consuming queue entries. Instead, set the
+    # model fallback to the CURRENT turn's token right before sending — the
+    # fallback is infinite so retries/internal calls all return it safely.
     reset_mock_llm(mock_llm_server_url)
-    for user_marker, assistant_token in turns:
-        # Use multiple copies so retries / continuation calls that carry the
-        # same user text don't exhaust the queue before the real turn fires.
-        configure_mock_llm(
-            mock_llm_server_url,
-            [{"text": assistant_token}] * 5,
-            key=user_marker,
-            match=user_marker,
-        )
     set_fallback_mock_llm(mock_llm_server_url, _CODEX_MOCK_MODEL, "")
 
     user_markers: list[str] = []
@@ -141,6 +138,8 @@ def test_native_codex_message_render_parity(
     for index, (user_marker, assistant_token) in enumerate(turns[:_COMPOSER_TURNS], start=1):
         user_markers.append(user_marker)
         assistant_tokens.append(assistant_token)
+        # Set the fallback to THIS turn's token right before sending.
+        set_fallback_mock_llm(mock_llm_server_url, _CODEX_MOCK_MODEL, assistant_token)
         _log.info(
             "composer turn %d: sending (marker=%s token=%s)", index, user_marker, assistant_token
         )
@@ -157,6 +156,7 @@ def test_native_codex_message_render_parity(
     tui_marker, tui_token = turns[_COMPOSER_TURNS]
     user_markers.append(tui_marker)
     assistant_tokens.append(tui_token)
+    set_fallback_mock_llm(mock_llm_server_url, _CODEX_MOCK_MODEL, tui_token)
     _open_terminal_view(page)
     _wait_terminal_connected(page)
     _log.info(

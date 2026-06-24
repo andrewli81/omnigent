@@ -26,7 +26,7 @@ import uuid
 import pytest
 from playwright.sync_api import Page, expect
 
-from tests.e2e_ui.conftest import configure_mock_llm, reset_mock_llm, set_fallback_mock_llm
+from tests.e2e_ui.conftest import reset_mock_llm, set_fallback_mock_llm
 
 # Reuse the custom-agent suite's helpers — both surfaces render from the same
 # canonical transcript, so parity / dedup / ordering are asserted identically.
@@ -121,16 +121,12 @@ def test_native_claude_message_render_parity(
         (f"usr-{i + 1}-{nonces[i]}", f"ast-{i + 1}-{nonces[i]}")
         for i in range(_COMPOSER_TURNS + 1)
     ]
+    # Set the model fallback to the current turn's token right before
+    # sending — updated per turn. Content-routing and FIFO both fail for
+    # native CLIs: they send the full conversation history on every request
+    # (polluting content matches) and make internal pre-turn LLM calls
+    # (consuming FIFO entries). The fallback is infinite and non-exhaustible.
     reset_mock_llm(mock_llm_server_url)
-    for user_marker, assistant_token in turns:
-        # Use multiple copies so retries / continuation calls that carry the
-        # same user text don't exhaust the queue before the real turn fires.
-        configure_mock_llm(
-            mock_llm_server_url,
-            [{"text": assistant_token}] * 5,
-            key=user_marker,
-            match=user_marker,
-        )
     set_fallback_mock_llm(mock_llm_server_url, _CLAUDE_MOCK_MODEL, "")
 
     user_markers: list[str] = []
@@ -140,6 +136,7 @@ def test_native_claude_message_render_parity(
     for index, (user_marker, assistant_token) in enumerate(turns[:_COMPOSER_TURNS], start=1):
         user_markers.append(user_marker)
         assistant_tokens.append(assistant_token)
+        set_fallback_mock_llm(mock_llm_server_url, _CLAUDE_MOCK_MODEL, assistant_token)
         _log.info(
             "composer turn %d: sending (marker=%s token=%s)", index, user_marker, assistant_token
         )
@@ -156,6 +153,7 @@ def test_native_claude_message_render_parity(
     tui_marker, tui_token = turns[_COMPOSER_TURNS]
     user_markers.append(tui_marker)
     assistant_tokens.append(tui_token)
+    set_fallback_mock_llm(mock_llm_server_url, _CLAUDE_MOCK_MODEL, tui_token)
     _open_terminal_view(page)
     _wait_terminal_connected(page)
     _log.info(
