@@ -58,6 +58,9 @@ _POST_TIMEOUT_S = 30.0
 #: and overflows the column — every mirror POST then 500s and, because the poll
 #: loop only advances its high-water rowid after a successful POST, the forwarder
 #: wedges on that one message and re-posts it forever. Cap at the column width.
+#: ``response_id`` is a non-unique, non-dedup grouping label, so truncation can in
+#: theory alias two blobs onto one id — that only groups two messages under one UI
+#: response, never data loss.
 _RESPONSE_ID_MAX_LEN = 64
 
 #: Consecutive server rejections (a 4xx, or a 5xx such as a failed DB insert) of

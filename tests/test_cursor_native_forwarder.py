@@ -11,7 +11,6 @@ tmux + cursor-agent path is exercised by the e2e gate, not here.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import sqlite3
@@ -432,8 +431,8 @@ async def _drive_forwarder(
             raise AssertionError("forwarder never reached the expected state (wedged?)")
     finally:
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        # Drain the cancelled task (return_exceptions swallows its CancelledError).
+        await asyncio.gather(task, return_exceptions=True)
     return bridge_dir
 
 

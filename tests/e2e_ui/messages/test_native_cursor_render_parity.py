@@ -55,7 +55,6 @@ against the spawned server, so the mirror→server→web path runs on every PR.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import logging
@@ -412,8 +411,8 @@ async def _mirror_seeded_store(
         )
     finally:
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        # Drain the cancelled task (return_exceptions swallows its CancelledError).
+        await asyncio.gather(task, return_exceptions=True)
 
 
 def _run_coro_in_thread(coro) -> None:
