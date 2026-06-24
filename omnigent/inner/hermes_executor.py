@@ -268,6 +268,12 @@ def _populate_hermes_home(
     if user_env.is_file():
         shutil.copy2(user_env, hermes_home / ".env")
 
+    # Copy the user's auth.json if present (carries provider credentials
+    # stored by ``hermes auth`` / ``hermes model``).
+    user_auth = Path.home() / ".hermes" / "auth.json"
+    if user_auth.is_file():
+        shutil.copy2(user_auth, hermes_home / "auth.json")
+
     # Pre-populate the allowlist so Hermes never prompts for consent.
     allowlist_path = hermes_home / "shell-hooks-allowlist.json"
     allowlist_path.write_text(json.dumps({str(wrapper): True}) + "\n")
