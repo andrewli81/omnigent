@@ -1489,6 +1489,27 @@ function MainAgentSurface({
                 {streamBubbles.map((bubble) => (
                   <BubbleView key={bubbleKey(bubble)} bubble={bubble} />
                 ))}
+                {/* Pending elicitation cards, floated to the bottom of the
+                    chat so an outstanding question stays in view (stick-to-
+                    bottom) no matter how much text the agent streamed after
+                    it. Wrapped in an assistant Message so each matches an
+                    inline card's look; removed from their inline slot by
+                    `stripPendingElicitations`. Newest renders last, nearest
+                    the composer. Rendered ABOVE the Working… indicator so the
+                    card sits closest to the prompt and the shimmer stays the
+                    last thing in the flow. */}
+                {pendingElicitations.map((item) => (
+                  <Message
+                    key={item.elicitationId}
+                    from="assistant"
+                    className="max-w-full"
+                    data-testid="bottom-elicitation"
+                  >
+                    <MessageContent className="w-full">
+                      <ElicitationCard item={item} />
+                    </MessageContent>
+                  </Message>
+                ))}
                 {/* Working… shimmer between send and first rendered block.
                     Suppressed when the last bubble is a compaction spinner —
                     that bubble already owns the "in-progress" slot. aria-hidden:
@@ -1515,25 +1536,6 @@ function MainAgentSurface({
                     Self-gates to null off the spin-up window; rendered only
                     when not already showing Working… so the two never stack. */}
                 {!showWorkingIndicator && <RunnerStartingIndicator variant="row" />}
-                {/* Pending elicitation cards, floated to the bottom of the
-                    chat so an outstanding question stays in view (stick-to-
-                    bottom) no matter how much text the agent streamed after
-                    it. Wrapped in an assistant Message so each matches an
-                    inline card's look; removed from their inline slot by
-                    `stripPendingElicitations`. Newest renders last, nearest
-                    the composer. */}
-                {pendingElicitations.map((item) => (
-                  <Message
-                    key={item.elicitationId}
-                    from="assistant"
-                    className="max-w-full"
-                    data-testid="bottom-elicitation"
-                  >
-                    <MessageContent className="w-full">
-                      <ElicitationCard item={item} />
-                    </MessageContent>
-                  </Message>
-                ))}
               </>
             )}
           </ConversationContent>
