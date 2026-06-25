@@ -10,6 +10,8 @@ import {
   describeCreateError,
   harnessUnavailableReasonOnHost,
   harnessUnconfiguredOnHost,
+  harnessWarningBadgeText,
+  harnessWarningMessageText,
   isValidSandboxRepoUrl,
   isValidWorkspace,
   matchSkillInvocation,
@@ -392,11 +394,35 @@ describe("harnessUnconfiguredOnHost", () => {
     expect(harnessUnconfiguredOnHost("claude-sdk", testHost)).toBe(false);
   });
 
+  it("keeps legacy non-codex false availability generic", () => {
+    const testHost = hostWith({ "claude-native": false });
+    const reason = harnessUnavailableReasonOnHost("claude-native", testHost);
+    expect(reason).toBe("unconfigured");
+    expect(harnessWarningBadgeText(reason)).toBe("needs setup");
+    expect(harnessWarningMessageText("Claude Code", "laptop", reason)).toBe(
+      "Claude Code isn't configured on laptop — run omnigent setup on that machine.",
+    );
+  });
+
   it("surfaces structured codex unavailable reasons", () => {
     const testHost = hostWith({ codex: "needs-auth", "codex-native": "binary-missing" });
     expect(harnessUnconfiguredOnHost("codex", testHost)).toBe(true);
     expect(harnessUnavailableReasonOnHost("codex", testHost)).toBe("needs-auth");
     expect(harnessUnavailableReasonOnHost("codex-native", testHost)).toBe("binary-missing");
+    expect(harnessWarningBadgeText("needs-auth")).toBe("needs auth");
+    expect(harnessWarningMessageText("Codex", "laptop", "needs-auth")).toBe(
+      "Codex needs Codex authentication on laptop — run codex login on that machine.",
+    );
+    expect(harnessWarningBadgeText("binary-missing")).toBe("binary missing");
+    expect(harnessWarningMessageText("Codex", "laptop", "binary-missing")).toBe(
+      "Codex is missing the Codex binary on laptop — run omnigent setup on that machine.",
+    );
+  });
+
+  it("ignores unknown future reason strings", () => {
+    expect(harnessUnavailableReasonOnHost("codex", hostWith({ codex: "future-reason" }))).toBe(
+      null,
+    );
   });
 
   it("never warns when readiness is unknown", () => {

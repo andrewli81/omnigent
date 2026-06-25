@@ -417,21 +417,45 @@ export function harnessUnconfiguredOnHost(
   return harnessUnavailableReasonOnHost(harness, host) !== null;
 }
 
+function isCodexHarness(harness: string): boolean {
+  return harness === "codex" || harness === "codex-native" || harness === "native-codex";
+}
+
 export function harnessUnavailableReasonOnHost(
   harness: string | null | undefined,
   host: Host | undefined | null,
 ): string | null {
   if (!harness || !host?.configured_harnesses) return null;
   const availability = host.configured_harnesses[harness];
-  if (availability === false) return "binary-missing";
-  if (availability === "binary-missing" || availability === "needs-auth") return availability;
+  if (availability === false) return isCodexHarness(harness) ? "binary-missing" : "unconfigured";
+  if (
+    isCodexHarness(harness) &&
+    (availability === "binary-missing" || availability === "needs-auth")
+  ) {
+    return availability;
+  }
+  // Unknown future reason strings fall through to no warning until the UI knows their copy.
   return null;
 }
 
-function harnessWarningBadgeText(reason: string | null): string {
+export function harnessWarningBadgeText(reason: string | null): string {
   if (reason === "binary-missing") return "binary missing";
   if (reason === "needs-auth") return "needs auth";
   return "needs setup";
+}
+
+export function harnessWarningMessageText(
+  agentName: string | undefined,
+  hostName: string | undefined,
+  reason: string | null,
+): string {
+  if (reason === "needs-auth") {
+    return `${agentName} needs Codex authentication on ${hostName} — run codex login on that machine.`;
+  }
+  if (reason === "binary-missing") {
+    return `${agentName} is missing the Codex binary on ${hostName} — run omnigent setup on that machine.`;
+  }
+  return `${agentName} isn't configured on ${hostName} — run omnigent setup on that machine.`;
 }
 
 function harnessWarningMessage(

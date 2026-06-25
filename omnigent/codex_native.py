@@ -176,6 +176,10 @@ def _codex_auth_json_has_available_credential(auth_path: Path) -> bool:
         for key in expiry_keys:
             if key not in container:
                 continue
+            # Absence is allowed: real ChatGPT-login auth.json stores expiry
+            # inside the id_token JWT, which this local-only check intentionally
+            # does not parse. If an explicit expiry key is present but
+            # unparseable, fail closed to needs-auth.
             timestamp = _codex_expiry_timestamp(container[key])
             if timestamp is None or timestamp <= now:
                 return False
