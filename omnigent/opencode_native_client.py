@@ -298,6 +298,32 @@ class OpenCodeClient:
         data = await self._request_json("POST", f"/session/{session_id}/abort")
         return bool(data)
 
+    async def summarize(self, session_id: str, *, provider_id: str, model_id: str) -> bool:
+        """
+        Compact a session in place (``POST /session/{id}/summarize``).
+
+        opencode summarizes the session with the given model and emits a
+        ``session.compacted`` event when done. (The v2
+        ``POST /api/session/{id}/compact`` endpoint returns ``503 "Session
+        compact is not available yet"`` in 1.17.x — verified against a live
+        ``opencode serve`` — so this uses the v1 ``/summarize`` path, which
+        requires the model explicitly.)
+
+        :param session_id: OpenCode session id.
+        :param provider_id: Provider id for the compaction model, e.g.
+            ``"anthropic"``.
+        :param model_id: Model id for the compaction model, e.g.
+            ``"claude-sonnet-4-5"``.
+        :returns: ``True`` once opencode has accepted the compaction request.
+        :raises OpenCodeClientError: On a non-2xx status.
+        """
+        await self._request_json(
+            "POST",
+            f"/session/{session_id}/summarize",
+            json={"providerID": provider_id, "modelID": model_id},
+        )
+        return True
+
     async def fork(
         self, session_id: str, payload: Mapping[str, Any] | None = None
     ) -> OpenCodeSession:

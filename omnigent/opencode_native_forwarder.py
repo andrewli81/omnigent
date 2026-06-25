@@ -47,6 +47,9 @@ _AGENT_NAME = "opencode"
 # shared with the codex-native forwarder).
 _EXTERNAL_ITEM = "external_conversation_item"
 _EXTERNAL_STATUS = "external_session_status"
+# Brackets opencode's own compaction; the server maps these to the
+# ``response.compaction.in_progress`` / ``…completed`` SSE the web UI renders.
+_EXTERNAL_COMPACTION_STATUS = "external_compaction_status"
 
 _STATUS_RUNNING = "running"
 _STATUS_IDLE = "idle"
@@ -536,6 +539,28 @@ class OpenCodeNativeForwarder:
         await self._flush_pending_text()
         await self._end_turn()
 
+    async def _on_compaction_started(self, event: OpenCodeEvent) -> None:
+        """Handle ``session.next.compaction.started`` (auto or manual).
+
+        Brackets opencode's own context compaction so the web UI shows its
+        "Compacting conversation…" marker while opencode summarizes the session
+        server-side. The Omnigent server maps ``external_compaction_status``
+        ``in_progress`` → the ``response.compaction.in_progress`` SSE the web
+        client already renders (the claude-native wire contract).
+        """
+        del event
+        await self._post_event(_EXTERNAL_COMPACTION_STATUS, {"status": "in_progress"})
+
+    async def _on_compaction_ended(self, event: OpenCodeEvent) -> None:
+        """Handle compaction completion — opencode finished compacting.
+
+        Fires on ``session.next.compaction.ended`` (auto-compaction) and on
+        ``session.compacted`` (an explicit ``/summarize``; verified against a
+        live ``opencode serve``). Both post the ``completed`` status.
+        """
+        del event
+        await self._post_event(_EXTERNAL_COMPACTION_STATUS, {"status": "completed"})
+
     async def _on_permission_asked(self, event: OpenCodeEvent) -> None:
         """Handle ``permission.v2.asked`` — evaluate policy and reply."""
         request = parse_permission_request(event.properties)
@@ -629,6 +654,13 @@ _HANDLERS: dict[str, Callable[[OpenCodeNativeForwarder, OpenCodeEvent], Awaitabl
     "session.status": OpenCodeNativeForwarder._on_session_status,
     "session.idle": OpenCodeNativeForwarder._on_session_idle,
     "session.error": OpenCodeNativeForwarder._on_session_error,
+    # Context compaction lifecycle → the web UI's compaction marker. Verified
+    # against a real ``opencode serve`` (1.17.7): auto-compaction emits the
+    # ``session.next.compaction.{started,ended}`` pair; an explicit
+    # ``/summarize`` emits ``session.compacted`` (completion only).
+    "session.next.compaction.started": OpenCodeNativeForwarder._on_compaction_started,
+    "session.next.compaction.ended": OpenCodeNativeForwarder._on_compaction_ended,
+    "session.compacted": OpenCodeNativeForwarder._on_compaction_ended,
     # Permission ask: 1.17.x emits ``permission.asked``; keep the ``v2`` spelling
     # too so a point-release rename still routes through the policy gate.
     "permission.asked": OpenCodeNativeForwarder._on_permission_asked,

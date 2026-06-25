@@ -10981,6 +10981,57 @@ def create_runner_app(
             )
         return Response(status_code=200)
 
+    async def _handle_opencode_native_compact(conv_id: str) -> Response:
+        """
+        Compact an opencode-native session via ``POST /session/{id}/summarize``.
+
+        opencode-native owns its context window server-side, so explicit
+        compaction is a real HTTP call (no tmux, unlike claude/codex): resolve
+        the live ``opencode serve`` + the opencode session id from bridge state,
+        read the session's current model (``/summarize`` requires it, and the v2
+        ``/compact`` endpoint is unavailable in 1.17.x), ask opencode to
+        compact, and return 200 so the Omnigent server skips its AP-side
+        fallback. Completion streams back as a ``session.compacted`` event the
+        forwarder surfaces as the web compaction marker.
+
+        :param conv_id: Session/conversation identifier, e.g. ``"conv_abc123"``.
+        :returns: 200 once opencode accepted the compaction; 204 when no live
+            opencode server/session is registered or the model can't be
+            resolved (the server falls back to in-process compaction); 503 if
+            the compaction request failed.
+        """
+        from omnigent.opencode_native_bridge import bridge_dir_for_bridge_id, read_bridge_state
+        from omnigent.opencode_native_client import OpenCodeClientError
+
+        server = _AUTO_OPENCODE_SERVERS.get(conv_id)
+        state = read_bridge_state(bridge_dir_for_bridge_id(conv_id))
+        if server is None or state is None or not state.opencode_session_id:
+            # No live opencode server/session — let the server run AP-side compaction.
+            return Response(status_code=204)
+        client = server.client()
+        try:
+            session = await client.get_session(state.opencode_session_id)
+            model = session.raw.get("model") if session is not None else None
+            provider_id = model.get("providerID") if isinstance(model, dict) else None
+            model_id = model.get("id") if isinstance(model, dict) else None
+            if not provider_id or not model_id:
+                # Can't resolve the session's model — fall back to AP-side.
+                return Response(status_code=204)
+            await client.summarize(
+                state.opencode_session_id, provider_id=provider_id, model_id=model_id
+            )
+        except (httpx.HTTPError, OpenCodeClientError, RuntimeError, ValueError) as exc:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "opencode_native_compact_failed",
+                    "detail": _client_safe_error_detail(exc, context="opencode-native compact"),
+                },
+            )
+        finally:
+            await client.aclose()
+        return Response(status_code=200)
+
     async def _handle_cursor_native_compact(conv_id: str) -> Response:
         """
         Inject ``/summarize`` into the cursor-agent TUI pane.
@@ -14015,6 +14066,8 @@ def create_runner_app(
                 return await _handle_claude_native_compact(conversation_id)
             if _session_harness_name(conversation_id) == "codex-native":
                 return await _handle_codex_native_compact(conversation_id)
+            if _session_harness_name(conversation_id) == "opencode-native":
+                return await _handle_opencode_native_compact(conversation_id)
             if _session_harness_name(conversation_id) == "cursor-native":
                 return await _handle_cursor_native_compact(conversation_id)
             if _session_harness_name(conversation_id) == "hermes-native":

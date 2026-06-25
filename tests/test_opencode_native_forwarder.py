@@ -421,3 +421,40 @@ async def test_seed_dedupe_from_history_swallows_errors() -> None:
     fwd = _forwarder(server, opencode)
     await fwd.seed_dedupe_from_history()  # best-effort → no raise
     assert fwd._msg_role == {}
+
+
+async def test_compaction_started_posts_in_progress() -> None:
+    """`session.next.compaction.started` → external_compaction_status in_progress."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    await fwd.handle_event(
+        _event("session.next.compaction.started", messageID="msg_1", reason="auto")
+    )
+    body = next(b for _u, b in server.posts if b["type"] == "external_compaction_status")
+    assert body["data"]["status"] == "in_progress"
+
+
+async def test_compaction_ended_posts_completed() -> None:
+    """`session.next.compaction.ended` → external_compaction_status completed."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    await fwd.handle_event(
+        _event(
+            "session.next.compaction.ended",
+            messageID="msg_1",
+            reason="manual",
+            text="summary",
+            recent="tail",
+        )
+    )
+    body = next(b for _u, b in server.posts if b["type"] == "external_compaction_status")
+    assert body["data"]["status"] == "completed"
+
+
+async def test_session_compacted_posts_completed() -> None:
+    """Explicit /summarize emits `session.compacted` → external_compaction_status completed."""
+    server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
+    fwd = _forwarder(server, opencode)
+    await fwd.handle_event(_event("session.compacted"))
+    body = next(b for _u, b in server.posts if b["type"] == "external_compaction_status")
+    assert body["data"]["status"] == "completed"
