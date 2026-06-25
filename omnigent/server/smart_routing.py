@@ -173,7 +173,13 @@ class LLMRoutingClient:
                 ],
             )
             text = response.output[0].content[0].text
-            verdict = json.loads(text)
+            _logger.info("LLMRoutingClient: raw response: %s", text[:500])
+            # Strip markdown code fences if the model wraps JSON.
+            stripped = text.strip()
+            if stripped.startswith("```"):
+                stripped = stripped.split("\n", 1)[-1]
+                stripped = stripped.rsplit("```", 1)[0].strip()
+            verdict = json.loads(stripped)
         except Exception:  # noqa: BLE001  # fail-open: any LLM/parse error skips routing
             _logger.warning("LLMRoutingClient: judge call failed", exc_info=True)
             return None
