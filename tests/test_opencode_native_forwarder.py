@@ -274,7 +274,15 @@ async def test_permission_asked_allows_only_on_explicit_policy_allow() -> None:
     assert opencode.replies[0][1]["reply"] == "once"
 
 
-async def test_permission_asked_allow_always_maps_to_always() -> None:
+async def test_permission_asked_allow_always_still_replies_once() -> None:
+    """An allow_always verdict must reply "once", never "always".
+
+    Replying "always" makes opencode persist the grant and stop emitting
+    permission.asked, which bypasses the server policy engine and breaks live
+    policy toggles (e.g. enabling "Require Approval" mid-session). The forwarder
+    always replies "once" so opencode re-asks every call; "always allow"
+    persistence is the server engine's job.
+    """
     server, opencode = _RecordingServerClient(), _FakeOpenCodeClient()
 
     async def allow_always(_normalized: Any) -> dict[str, Any]:
@@ -282,7 +290,7 @@ async def test_permission_asked_allow_always_maps_to_always() -> None:
 
     fwd = _forwarder(server, opencode, policy_evaluator=allow_always)
     await fwd.handle_event(_event("permission.v2.asked", id="per_aa", action="bash"))
-    assert opencode.replies[0][1]["reply"] == "always"
+    assert opencode.replies[0][1]["reply"] == "once"
 
 
 async def test_permission_asked_rejects_when_policy_returns_ask() -> None:
