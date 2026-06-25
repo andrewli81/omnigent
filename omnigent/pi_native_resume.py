@@ -92,11 +92,7 @@ def _pi_entry_timestamp() -> str:
 
     :returns: Timestamp string, e.g. ``"2026-06-25T08:00:00.000Z"``.
     """
-    return (
-        datetime.now(timezone.utc)
-        .isoformat(timespec="milliseconds")
-        .replace("+00:00", "Z")
-    )
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _synthetic_pi_entry_id(
@@ -501,9 +497,7 @@ async def fetch_all_session_items_for_pi_resume(
             ) from exc
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, list):
-            raise RuntimeError(
-                f"History fetch for {session_id!r} returned an invalid item list."
-            )
+            raise RuntimeError(f"History fetch for {session_id!r} returned an invalid item list.")
         for item in data:
             if isinstance(item, dict):
                 items.append(item)
@@ -511,9 +505,7 @@ async def fetch_all_session_items_for_pi_resume(
             return items
         last_id = payload.get("last_id")
         if not isinstance(last_id, str) or not last_id:
-            raise RuntimeError(
-                f"History fetch for {session_id!r} set has_more without last_id."
-            )
+            raise RuntimeError(f"History fetch for {session_id!r} set has_more without last_id.")
         after = last_id
 
 

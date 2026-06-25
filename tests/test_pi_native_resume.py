@@ -7,6 +7,7 @@ the resume-file path resolution, and the end-to-end
 
 from __future__ import annotations
 
+import itertools
 import json
 from pathlib import Path
 from typing import Any
@@ -218,7 +219,7 @@ def test_full_tool_roundtrip_chains_correctly() -> None:
     ]
     # Parent chain is strictly linear.
     assert entries[0]["parentId"] is None
-    for prev, cur in zip(entries, entries[1:]):
+    for prev, cur in itertools.pairwise(entries):
         assert cur["parentId"] == prev["id"]
 
 
@@ -392,6 +393,7 @@ async def test_ensure_local_pi_resume_session_unsafe_id_returns_none(tmp_path: P
 async def test_ensure_local_pi_resume_session_reuses_existing(tmp_path: Path) -> None:
     existing = tmp_path / f"2026-06-25T08-00-00-000Z_{_EXTERNAL_ID}.jsonl"
     existing.write_text('{"type":"session"}\n', encoding="utf-8")
+
     # The handler would raise if called; reuse must short-circuit the fetch.
     def boom(_request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not run
         raise AssertionError("items endpoint must not be hit when a local file exists")
