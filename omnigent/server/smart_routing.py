@@ -128,6 +128,21 @@ Return **strict JSON only** — no markdown, no explanation outside the object:
 """
 
 
+_VERDICT_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "tier": {
+            "type": "string",
+            "enum": ["cheap", "medium", "expensive"],
+        },
+        "model": {"type": "string"},
+        "rationale": {"type": "string"},
+    },
+    "required": ["tier", "model", "rationale"],
+    "additionalProperties": False,
+}
+
+
 def _build_rubric(tiers: dict[str, list[str]]) -> str:
     """Format the judge system prompt with the tier menu."""
     tier_order = ["cheap", "medium", "expensive"]
@@ -171,15 +186,18 @@ class LLMRoutingClient:
                         ],
                     }
                 ],
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "routing_verdict",
+                        "strict": True,
+                        "schema": _VERDICT_SCHEMA,
+                    }
+                },
             )
             text = response.output[0].content[0].text
             _logger.info("LLMRoutingClient: raw response: %s", text[:500])
-            # Strip markdown code fences if the model wraps JSON.
-            stripped = text.strip()
-            if stripped.startswith("```"):
-                stripped = stripped.split("\n", 1)[-1]
-                stripped = stripped.rsplit("```", 1)[0].strip()
-            verdict = json.loads(stripped)
+            verdict = json.loads(text)
         except Exception:  # noqa: BLE001  # fail-open: any LLM/parse error skips routing
             _logger.warning("LLMRoutingClient: judge call failed", exc_info=True)
             return None
