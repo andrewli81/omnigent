@@ -41,6 +41,11 @@ TIER_TEMPLATES: dict[str, dict[str, list[str]]] = {
         "medium": ["databricks-claude-sonnet-4-6"],
         "expensive": ["databricks-claude-opus-4-8"],
     },
+    "gpt": {
+        "cheap": ["databricks-gpt-4o-mini"],
+        "medium": ["databricks-gpt-4o"],
+        "expensive": ["databricks-gpt-5-4"],
+    },
 }
 
 # Harness type → model family.  Only families with a tier template
@@ -49,6 +54,11 @@ _HARNESS_FAMILY: dict[str, str] = {
     "claude-sdk": "claude",
     "claude_sdk": "claude",
     "claude-native": "claude",
+    "codex": "gpt",
+    "codex-native": "gpt",
+    "openai-agents": "gpt",
+    "openai-agents-sdk": "gpt",
+    "agents_sdk": "gpt",
 }
 
 # Valid tier names the judge may return.
