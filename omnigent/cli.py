@@ -4626,18 +4626,22 @@ def _ensure_bundled_agent_credentials(name: str) -> None:
         set_default_provider,
     )
 
-    families = _bundled_agent_families(name)
-    if not families:
-        return
     # Best-effort: adopting a default must never crash a launch. Any malformed
     # or unexpected config state (corrupt YAML, ambiguous defaults, a divergent
     # on-disk entry) degrades to a no-op — the harness then raises its own
-    # credential error.
+    # credential error. Reading the bundle's families is inside the guard too, so
+    # a malformed bundle config degrades the same way rather than propagating.
     try:
+        families = _bundled_agent_families(name)
+        if not families:
+            return
         for family in families:
-            # Re-read each iteration so a default adopted for an earlier family
-            # (e.g. a Databricks workspace serving both anthropic and openai) is
-            # seen here and not adopted a second time.
+            # Re-read per iteration: set_default_provider below shallow-replaces
+            # the whole providers: block, so adopting for a later family must
+            # build on the block that already carries an earlier family's
+            # just-saved default — otherwise the shallow replace would drop it.
+            # (A provider serving both families is adopted once per family; the
+            # per-family defaults union, so it ends up default: true for both.)
             config = effective_config_with_detected(load_config())
             if get_default_provider(config, family) is not None:
                 continue
