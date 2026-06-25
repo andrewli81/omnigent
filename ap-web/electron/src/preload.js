@@ -67,6 +67,44 @@ contextBridge.exposeInMainWorld("omnigentDesktop", {
   openServerSetup: () => {
     ipcRenderer.send("omnigent:open-server-setup");
   },
+  /**
+   * This machine's host-connection status for the window's server, e.g.
+   * `{cliInstalled, connected, process, hostStatus, sessions, ownedByDesktop,
+   * error}`. Resolves null on pages that aren't a connected server.
+   */
+  getHostStatus: () => ipcRenderer.invoke("omnigent:host-get-status"),
+  /**
+   * Connect (true) or disconnect (false) this machine as a host for the
+   * window's server. Resolves a `{ok, …}` result.
+   * @param {boolean} enabled
+   */
+  setHostEnabled: (enabled) => ipcRenderer.invoke("omnigent:host-set-enabled", Boolean(enabled)),
+  /**
+   * Local-server status for the window's server (loopback only); resolves null
+   * for remote servers.
+   */
+  getServerStatus: () => ipcRenderer.invoke("omnigent:server-get-status"),
+  /**
+   * Start (true) / stop (false) the local server (loopback servers only; stop
+   * affects only a server this app started). Resolves a `{ok, …}` result.
+   * @param {boolean} running
+   */
+  setServerRunning: (running) =>
+    ipcRenderer.invoke("omnigent:server-set-running", Boolean(running)),
+  /**
+   * Subscribe to pushed host-status updates (emitted on a timer and right after
+   * a toggle). The callback receives the same shape as getHostStatus. Returns
+   * an unsubscribe function.
+   * @param {(status: object) => void} callback
+   * @returns {() => void}
+   */
+  onHostStatusChanged: (callback) => {
+    const listener = (_event, status) => {
+      if (status && typeof status === "object") callback(status);
+    };
+    ipcRenderer.on("omnigent:host-status-changed", listener);
+    return () => ipcRenderer.removeListener("omnigent:host-status-changed", listener);
+  },
 });
 
 // Setup-page bridge: persist + navigate to a server URL, and read the saved
@@ -76,4 +114,22 @@ contextBridge.exposeInMainWorld("omnigentSetup", {
   setServerUrl: (url) => ipcRenderer.invoke("omnigent:set-server-url", url),
   /** Recently-connected server URLs, most recent first. */
   getRecentServers: () => ipcRenderer.invoke("omnigent:get-recent-servers"),
+  /**
+   * Whether the `omnigent` CLI is installed/runnable, e.g.
+   * `{installed, path, version, source, installCommand}`.
+   */
+  getCliStatus: () => ipcRenderer.invoke("omnigent:get-cli-status"),
+  /**
+   * Set an explicit path to the omnigent binary. Resolves the CLI status plus
+   * `accepted` (whether that exact path validated and was saved).
+   * @param {string} path
+   */
+  setCliPath: (path) => ipcRenderer.invoke("omnigent:set-cli-path", path),
+  /** Native file picker for the omnigent binary; resolves the path or null. */
+  browseCliPath: () => ipcRenderer.invoke("omnigent:browse-cli-path"),
+  /**
+   * Start (or reuse) the local server. Resolves `{ok, url?, error?}`; the
+   * caller then connects to `url` via setServerUrl.
+   */
+  startLocalServer: () => ipcRenderer.invoke("omnigent:start-local-server"),
 });

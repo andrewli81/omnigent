@@ -32,6 +32,8 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { registerLocalhostCors } = require("./localhost_cors");
 const { normalizeUrl, expandDatabricksWorkspaceUrl, WORKSPACE_UI_PATH } = require("./url");
+const omnigentCli = require("./omnigent_cli");
+const serverManager = require("./server_manager");
 
 /** Absolute path to the bundled setup page (the "connect to server" form). */
 const SETUP_PAGE = path.join(__dirname, "..", "setup", "index.html");
@@ -537,6 +539,84 @@ function pinWindow(win, origin) {
 }
 
 /**
+ * Record (or clear) the full server URL a window is connected to. The pinned
+ * `origin` drops any path, but the host/server CLI commands need the exact URL
+ * the user connected with (e.g. a Databricks ``…/ml/omnigents`` mount), so the
+ * window keeps both.
+ *
+ * @param {BrowserWindow} win
+ * @param {string | null} serverUrl
+ */
+function setWindowServerUrl(win, serverUrl) {
+  const state = windows.get(win);
+  if (state) state.serverUrl = serverUrl;
+}
+
+/**
+ * The full server URL of the window that sent an IPC event, or null. Used by
+ * the host/server-management handlers to scope CLI commands to the window's
+ * own server.
+ *
+ * @param {Electron.IpcMainInvokeEvent | Electron.IpcMainEvent} event
+ * @returns {string | null}
+ */
+function senderServerUrl(event) {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return (win && windows.get(win)?.serverUrl) || null;
+}
+
+/**
+ * Push fresh host-connection status to every pinned window, deduplicating CLI
+ * queries by server URL (two windows on one server share a single query). Sent
+ * on a timer and immediately after a connect/disconnect toggle so the in-app
+ * indicator stays live.
+ */
+function broadcastHostStatus() {
+  const cliPath = resolvedCliPath();
+  const winsByUrl = new Map();
+  for (const [win, state] of windows) {
+    if (win.isDestroyed() || !state.origin || !state.serverUrl) continue;
+    if (!winsByUrl.has(state.serverUrl)) winsByUrl.set(state.serverUrl, []);
+    winsByUrl.get(state.serverUrl).push(win);
+  }
+  for (const [serverUrl, wins] of winsByUrl) {
+    serverManager
+      .statusFor(cliPath, serverUrl)
+      .then((status) => {
+        for (const win of wins) {
+          if (win.isDestroyed()) continue;
+          try {
+            win.webContents.send("omnigent:host-status-changed", status);
+          } catch {
+            // Window torn down between the check and the send; ignore.
+          }
+        }
+      })
+      .catch(() => {});
+  }
+}
+
+/** Interval handle for the host-status poller; started lazily in registerIpc. */
+let hostStatusTimer = null;
+
+/**
+ * Poll host status every few seconds while at least one pinned window exists,
+ * broadcasting changes to the SPA. Idempotent.
+ */
+function startHostStatusPoller() {
+  if (hostStatusTimer) return;
+  hostStatusTimer = setInterval(() => {
+    for (const state of windows.values()) {
+      if (state.origin && state.serverUrl) {
+        broadcastHostStatus();
+        return;
+      }
+    }
+  }, 5000);
+  if (typeof hostStatusTimer.unref === "function") hostStatusTimer.unref();
+}
+
+/**
  * The window an OS-menu / app-level action should target: the currently
  * focused shell window, falling back to any open one (or null when none).
  * Per-window IPC (e.g. the setup page persisting a URL) instead resolves the
@@ -572,6 +652,19 @@ function loadSettings() {
 function saveSettings(settings) {
   fs.mkdirSync(app.getPath("userData"), { recursive: true });
   fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), "utf8");
+}
+
+/**
+ * Resolve the `omnigent` CLI binary path from the user's configured override
+ * (``settings.omnigent_path``) plus the standard locations, or null when none
+ * is usable. Re-resolved on each call so a freshly-configured path takes
+ * effect without a restart.
+ *
+ * @returns {string | null}
+ */
+function resolvedCliPath() {
+  const resolved = omnigentCli.resolveCliPath(loadSettings().omnigent_path);
+  return resolved ? resolved.path : null;
 }
 
 /** Maximum number of entries kept in the persisted recent-servers list. */
@@ -791,6 +884,8 @@ function createWindow(targetUrl, opts = {}) {
     // Pin to the destination's origin up front; setup-page windows stay
     // unpinned (null) until the user connects them.
     origin: destinationOrigin,
+    // Full connected URL (incl. any path) for host/server CLI commands.
+    serverUrl: destination,
     ephemeral,
     badgeCount: 0,
   });
@@ -1398,6 +1493,7 @@ function registerIpc() {
       // The user explicitly chose this server — it becomes the window's
       // trusted origin for privileged IPC and permission grants.
       pinWindow(win, new URL(target).origin);
+      setWindowServerUrl(win, target);
       win
         .loadURL(target)
         .then(() => {
@@ -1476,6 +1572,7 @@ function registerIpc() {
     }
     if (win) {
       pinWindow(win, new URL(url).origin);
+      setWindowServerUrl(win, url);
       win
         .loadURL(url)
         .then(() => {
@@ -1503,6 +1600,7 @@ function registerIpc() {
     if (!win) return;
     const ephemeral = windows.get(win)?.ephemeral === true;
     pinWindow(win, null); // back on the setup page → no trusted origin
+    setWindowServerUrl(win, null);
     void win.loadFile(SETUP_PAGE, ephemeral ? { search: "ephemeral=1" } : undefined);
   });
 
@@ -1611,6 +1709,139 @@ function registerIpc() {
     signalForeground();
     return true;
   });
+
+  // -------------------------------------------------------------------------
+  // Server management — CLI detection, local server, and host connection.
+  //
+  // Setup-page handlers (CLI detection, path config, start-locally) gate on
+  // isSetupPageSender; the in-app status/control handlers gate on
+  // isPinnedOriginSender and act only on the SENDER window's own server.
+  // -------------------------------------------------------------------------
+
+  // Setup page → is the `omnigent` CLI installed and runnable? Includes the
+  // resolved path, version, and the install one-liner to show when missing.
+  ipcMain.handle("omnigent:get-cli-status", async (event) => {
+    if (!isSetupPageSender(event)) {
+      throw new Error("get-cli-status is only available to the setup page");
+    }
+    return omnigentCli.getCliStatus(loadSettings().omnigent_path);
+  });
+
+  // Setup page → set an explicit path to the `omnigent` binary. Persisted only
+  // when that exact path validates as a runnable omnigent (so a typo doesn't
+  // silently mask a working PATH lookup). Returns the resulting CLI status plus
+  // whether the configured path was accepted.
+  ipcMain.handle("omnigent:set-cli-path", async (event, configuredPath) => {
+    if (!isSetupPageSender(event)) {
+      throw new Error("set-cli-path is only available to the setup page");
+    }
+    const trimmed = String(configuredPath ?? "").trim();
+    const status = await omnigentCli.getCliStatus(trimmed || null);
+    const accepted = status.installed && status.source === "configured";
+    if (accepted) {
+      const settings = loadSettings();
+      settings.omnigent_path = trimmed;
+      saveSettings(settings);
+    } else if (trimmed === "") {
+      // Empty input clears any saved override (revert to PATH/candidates).
+      const settings = loadSettings();
+      delete settings.omnigent_path;
+      saveSettings(settings);
+    }
+    return { ...status, accepted };
+  });
+
+  // Setup page → native file picker for the omnigent binary. Returns the chosen
+  // path (the renderer feeds it back through set-cli-path) or null on cancel.
+  ipcMain.handle("omnigent:browse-cli-path", async (event) => {
+    if (!isSetupPageSender(event)) {
+      throw new Error("browse-cli-path is only available to the setup page");
+    }
+    const win = BrowserWindow.fromWebContents(event.sender) ?? activeWindow();
+    const result = await dialog.showOpenDialog(win ?? undefined, {
+      title: "Locate the omnigent binary",
+      properties: ["openFile"],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
+  // Setup page → start (or reuse) the local server. Returns its URL so the
+  // setup page can hand off to the normal setServerUrl navigation flow.
+  ipcMain.handle("omnigent:start-local-server", async (event) => {
+    if (!isSetupPageSender(event)) {
+      throw new Error("start-local-server is only available to the setup page");
+    }
+    const cliPath = resolvedCliPath();
+    if (!cliPath) {
+      return { ok: false, error: "The omnigent CLI was not found. Install it or set its path." };
+    }
+    return serverManager.startLocalServer(cliPath);
+  });
+
+  // SPA → this machine's host-connection status for the window's own server.
+  ipcMain.handle("omnigent:host-get-status", async (event) => {
+    if (!isPinnedOriginSender(event)) {
+      console.warn("[omnigent] host-get-status from untrusted sender dropped");
+      return null;
+    }
+    const serverUrl = senderServerUrl(event);
+    if (!serverUrl) return null;
+    return serverManager.statusFor(resolvedCliPath(), serverUrl);
+  });
+
+  // SPA → connect (true) or disconnect (false) this machine as a host for the
+  // window's own server. The explicit opt-in toggle for hosting.
+  ipcMain.handle("omnigent:host-set-enabled", async (event, enabled) => {
+    if (!isPinnedOriginSender(event)) {
+      throw new Error("host-set-enabled is only available to a connected server page");
+    }
+    const serverUrl = senderServerUrl(event);
+    if (!serverUrl) return { ok: false, error: "this window is not connected to a server" };
+    const cliPath = resolvedCliPath();
+    if (!cliPath) {
+      return { ok: false, error: "The omnigent CLI was not found. Install it or set its path." };
+    }
+    const result = enabled
+      ? await serverManager.ensureHostConnected(cliPath, serverUrl)
+      : await serverManager.disconnectHost(cliPath, serverUrl);
+    broadcastHostStatus();
+    return result;
+  });
+
+  // SPA → local-server status (loopback servers only; null otherwise).
+  ipcMain.handle("omnigent:server-get-status", async (event) => {
+    if (!isPinnedOriginSender(event)) {
+      console.warn("[omnigent] server-get-status from untrusted sender dropped");
+      return null;
+    }
+    const serverUrl = senderServerUrl(event);
+    if (!serverUrl) return null;
+    return serverManager.serverStatusFor(resolvedCliPath(), serverUrl);
+  });
+
+  // SPA → start (true) / stop (false) the local server, for loopback servers
+  // only. Stop affects only a server this app started.
+  ipcMain.handle("omnigent:server-set-running", async (event, running) => {
+    if (!isPinnedOriginSender(event)) {
+      throw new Error("server-set-running is only available to a connected server page");
+    }
+    const serverUrl = senderServerUrl(event);
+    if (!serverUrl || !omnigentCli.isLoopbackServer(serverUrl)) {
+      return { ok: false, error: "the local-server control applies to loopback servers only" };
+    }
+    const cliPath = resolvedCliPath();
+    if (!cliPath) {
+      return { ok: false, error: "The omnigent CLI was not found. Install it or set its path." };
+    }
+    const result = running
+      ? await serverManager.startLocalServer(cliPath)
+      : await serverManager.stopOwnedLocalServer(cliPath);
+    broadcastHostStatus();
+    return result;
+  });
+
+  startHostStatusPoller();
 }
 
 // ---------------------------------------------------------------------------
@@ -1653,5 +1884,22 @@ if (!gotLock) {
   app.on("window-all-closed", () => {
     // macOS apps typically stay alive until Cmd-Q.
     if (process.platform !== "darwin") app.quit();
+  });
+
+  // Tear down what this app started: SIGTERM any host children it spawned and
+  // stop a local server it owns. The desktop owns its host connections (the
+  // confirmed lifecycle), so quitting disconnects this machine. We defer the
+  // quit until cleanup finishes, then re-issue it.
+  let quitCleanupDone = false;
+  app.on("before-quit", (event) => {
+    if (quitCleanupDone) return;
+    event.preventDefault();
+    serverManager
+      .shutdown(resolvedCliPath())
+      .catch(() => {})
+      .finally(() => {
+        quitCleanupDone = true;
+        app.quit();
+      });
   });
 }
