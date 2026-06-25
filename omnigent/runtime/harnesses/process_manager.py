@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import secrets
 import shutil
 import signal
 import socket
@@ -59,6 +60,15 @@ if IS_WINDOWS:
 else:
     _TMP_PARENT = Path("/tmp/omnigent")
 _TMP_PARENT_ENV_VAR = "OMNIGENT_HARNESS_TMP_PARENT"
+
+# S1 (security): env var carrying the per-spawn bearer token for the harness
+# control channel. The parent generates a fresh token per subprocess, ships it
+# here (private to the parent/child pair), and presents it on every ``/v1``
+# request; the harness scaffold's auth middleware compares against it. This is
+# the access boundary on Windows, where the IPC is a loopback TCP listener
+# reachable by any local process; on POSIX (uid-isolated UDS) it is defence in
+# depth.
+_HARNESS_AUTH_TOKEN_ENV = "OMNIGENT_HARNESS_AUTH_TOKEN"
 
 # Sentinel file the Omnigent instance writes into its subdir on boot. The
 # orphan sweep uses it to tell whether a sibling subdir belongs to
@@ -903,6 +913,16 @@ class HarnessProcessManager:
         # payload running in the harness can't impersonate the runner.
         # See ``_build_harness_spawn_env``.
         effective_env: dict[str, str] = _build_harness_spawn_env(env)
+        # S1 (security): on Windows the harness IPC is a loopback-TCP listener
+        # reachable by any local process, so mint a fresh per-spawn bearer token
+        # as the access boundary the uid-isolated UDS provides on POSIX. This is
+        # Windows-only: POSIX keeps the UDS and sets no token, leaving the
+        # scaffold's auth gate inert. The token is delivered via the harness's
+        # private env and presented by our client (below) on every /v1 request.
+        auth_token: str | None = None
+        if IS_WINDOWS:
+            auth_token = secrets.token_urlsafe(32)
+            effective_env[_HARNESS_AUTH_TOKEN_ENV] = auth_token
 
         parent_pid = os.getpid()
 
@@ -946,6 +966,11 @@ class HarnessProcessManager:
         client = httpx.AsyncClient(
             transport=endpoint.make_transport(),
             base_url=endpoint.base_url,
+            # S1 (security): present the per-spawn bearer token (Windows only)
+            # so the harness scaffold accepts this client and rejects any
+            # unauthenticated local peer on the loopback-TCP channel. Empty on
+            # POSIX, where the uid-isolated UDS is the access boundary.
+            headers=({"Authorization": f"Bearer {auth_token}"} if auth_token else {}),
             # See the comment above the constant for rationale.
             # Connect/write/pool keep the 5s default so a vanished
             # harness still surfaces quickly; read=None defers
