@@ -178,11 +178,13 @@ to `/policies/evaluate` → the cost-budget gate reads the session cost (from th
   appears on the pane; (b) hit it while in web Chat, then open the Terminal →
   the pending approval **re-pops** on attach.
 - Known limitations to confirm, not flag as bugs:
-  - Enforcement is **tool-call-phase only**. opencode has no prompt-submit hook
-    (claude-native's `UserPromptSubmit`), so a TUI turn is blocked at its **first
-    gated tool call**, not at the moment the message is sent. A pure-text turn
-    with no tool calls can slip one turn. (Most agentic turns call tools, so this
-    blocks real work; it's an opencode platform limit, not a wiring gap.)
+  - Enforcement is **tool-call-phase only** in the CURRENT integration (reactive
+    over `permission.asked`), so a TUI turn is blocked at its **first gated tool
+    call**, not at message-send; a pure-text turn with no tool calls can slip one
+    turn. This is an integration gap, **not** an opencode limit — opencode's
+    plugin `chat.message` hook fires at prompt submit and would close it (see the
+    plugin-hook follow-up in `opencode-native-gaps.md`). Most agentic turns call
+    tools, so the current tool-call gate already blocks real work.
   - Enforcement can lag the in-flight turn by one message (the turn's cost posts
     on completion), same as claude/codex.
 
