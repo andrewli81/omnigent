@@ -316,6 +316,25 @@ async function runToolResult(resultText) {
     ctx,
   );
 }
+
+// Fire the tool_execution_end backstop with the same callId as the tool_result
+// event, carrying the (already-finalized) result content. Used to prove the
+// backstop mirror is a no-op after the tool_result handler already mirrored
+// the suppressed text on DENY (it must NOT re-mirror the real output).
+async function runToolExecutionEnd(resultText) {
+  assert.equal(typeof handlers.tool_execution_end, "function");
+  return handlers.tool_execution_end(
+    {
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "Bash",
+      input: { command: "cat secrets.txt" },
+      content: [{ type: "text", text: resultText }],
+      isError: false,
+    },
+    ctx,
+  );
+}
 """
 
 
@@ -719,6 +738,52 @@ def test_tool_result_deny_suppresses_and_returns_policy_error(
   assert.ok(mirror, JSON.stringify(mirroredItems));
   assert.equal(mirror.data.item_data.output.includes("sk-123"), false);
   assert.match(mirror.data.item_data.output, /policy/i);
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exit(1);
+});
+"""
+    _run_policy_node_script(_extension_path(), tmp_path, body)
+
+
+def test_tool_execution_end_after_deny_does_not_remirror_real_output(
+    tmp_path: Path,
+) -> None:
+    """The tool_execution_end backstop must NOT re-mirror the real output after a DENY.
+
+    The tool_result handler runs first and, on DENY, mirrors the SUPPRESSED
+    text (dedup keyed on response_id:call_id). The later tool_execution_end
+    backstop carries the (real) finalized result; it must dedup to a no-op so
+    the sensitive output never leaks into the conversation mirror. This guards
+    the leak Polly flagged: a backstop that re-mirrors after a DENY.
+    """
+    body = r"""
+(async () => {
+  responders = [
+    (_b) =>
+      makeJsonResponse({ result: "POLICY_ACTION_DENY", reason: "leaked SECRET" }),
+  ];
+  const out = await runToolResult("here is the SECRET api key sk-123");
+  assert.equal(out.isError, true);
+  // Now fire the backstop with the REAL output, same callId. It must NOT
+  // produce a second mirror, and the real output must never appear anywhere.
+  const beforeCount = mirroredItems.filter(
+    (e) => e.data && e.data.item_type === "function_call_output",
+  ).length;
+  await runToolExecutionEnd("here is the SECRET api key sk-123");
+  const outputs = mirroredItems.filter(
+    (e) => e.data && e.data.item_type === "function_call_output",
+  );
+  assert.equal(outputs.length, beforeCount, "backstop re-mirrored after DENY");
+  assert.equal(outputs.length, 1, JSON.stringify(outputs));
+  // No mirrored output ever contains the real sensitive text.
+  for (const m of outputs) {
+    assert.equal(
+      m.data.item_data.output.includes("sk-123"),
+      false,
+      m.data.item_data.output,
+    );
+  }
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
   process.exit(1);

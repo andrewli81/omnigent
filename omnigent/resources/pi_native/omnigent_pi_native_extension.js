@@ -900,6 +900,20 @@ module.exports = function (pi) {
     rememberContext(ctx);
     const blocked = replayPendingInterrupt(ctx);
     const responseId = currentResponseId();
+    // A pending interrupt short-circuits BEFORE the result-policy evaluation —
+    // mirroring the tool_call gate, which returns on ``blocked`` before its own
+    // (potentially long-parking) policy call. The TOOL_RESULT gate can PARK
+    // server-side waiting for a human approval, and that fetch is not bound to
+    // ctx.abort(); without this guard a user interrupt arriving while the gate
+    // is parked would be swallowed and the agent loop held until the human
+    // resolves the card or the park ceiling. The interrupt already aborts the
+    // turn (replayPendingInterrupt → ctx.abort()); we just mirror the real
+    // result once (so the conversation stays consistent) and return nothing so
+    // we neither park nor suppress an interrupted turn's result.
+    if (blocked) {
+      await postToolResult(event, responseId);
+      return;
+    }
     // Evaluate the TOOL_RESULT policy checkpoint BEFORE mirroring the result
     // to Omnigent or returning it to the model. This is the second enforcement
     // point (SKILL.md harness checklist #6): the server gates the *output* with
@@ -934,11 +948,9 @@ module.exports = function (pi) {
       await postToolResult(event, responseId, text);
       return { content: [{ type: "text", text }], isError: true };
     }
-    // ALLOW (or interrupted): mirror the result as-is and return nothing so Pi
-    // hands the real output to the model unchanged. An interrupt is handled by
-    // the standard replay (it aborts the turn); the result still mirrors once.
+    // ALLOW: mirror the real result as-is and return nothing so Pi hands the
+    // real output to the model unchanged.
     await postToolResult(event, responseId);
-    void blocked;
   });
 
   pi.on("tool_execution_end", async (event, ctx) => {

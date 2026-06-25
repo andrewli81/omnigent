@@ -91,6 +91,7 @@ from omnigent.model_override import validate_model_override
 from omnigent.native_coding_agents import (
     CLAUDE_NATIVE_CODING_AGENT,
     CODEX_NATIVE_CODING_AGENT,
+    PI_NATIVE_CODING_AGENT,
     NativeCodingAgent,
     native_coding_agent_for_agent_name,
     native_coding_agent_for_harness,
@@ -14560,12 +14561,47 @@ def create_sessions_router(
     # rather than returned raw to the native caller. Defined once so the two
     # checkpoints in ``evaluate_policy`` (initial check + re-check under the
     # serialize lock) cannot drift. See the long-form rationale at the gate.
+    #
+    # These phases block *before* the action proceeds (tool dispatch / LLM
+    # call / a native session's user prompt), so parking ASK here is correct
+    # for every native caller.
     _NATIVE_ASK_GATE_PHASES: tuple[Phase, ...] = (
         Phase.TOOL_CALL,
         Phase.LLM_REQUEST,
         Phase.REQUEST,
-        Phase.TOOL_RESULT,
     )
+    # TOOL_RESULT runs *after* the tool executed, so parking its ASK only
+    # makes sense for a harness that can intercept the result before the model
+    # consumes it (pi-native's ``tool_result`` extension hook can
+    # replace/suppress the result). The other native harnesses post a
+    # committed result via PostToolUse (Claude/Codex/Cursor map PostToolUse →
+    # PHASE_TOOL_RESULT) where the result can only be annotated, never
+    # suppressed — parking their result-phase ASK would stall the turn awaiting
+    # an approval that cannot change the already-committed output. So
+    # TOOL_RESULT is added to the ASK-gate phases ONLY for the pi-native
+    # harness; every other caller falls through to the raw verdict
+    # (``evaluation_response_to_hook_output(PostToolUse, ASK)`` → no-op).
+    _PI_NATIVE_HARNESS = PI_NATIVE_CODING_AGENT.harness
+
+    def _native_ask_gate_phases(harness: str | None) -> tuple[Phase, ...]:
+        """
+        ASK-gate (server-parked) phases for a session's harness.
+
+        Always includes the pre-action phases; adds ``Phase.TOOL_RESULT`` only
+        for the pi-native harness, whose extension can intercept (and so
+        meaningfully ASK on) a result before the model consumes it.
+
+        :param harness: Canonical harness id for the session, e.g.
+            ``"pi-native"`` or ``"claude-native"``; ``None`` when unknown.
+            ``_resolve_harness`` already canonicalizes, so a defensive
+            canonicalize here only normalizes a raw alias.
+        :returns: The tuple of phases to resolve via the server-side ASK gate.
+        """
+        from omnigent.harness_aliases import canonicalize_harness
+
+        if canonicalize_harness(harness) == _PI_NATIVE_HARNESS:
+            return (*_NATIVE_ASK_GATE_PHASES, Phase.TOOL_RESULT)
+        return _NATIVE_ASK_GATE_PHASES
 
     # ── POST /sessions/{session_id}/policies/evaluate ─────────────
 
@@ -14728,17 +14764,29 @@ def create_sessions_router(
         #
         # TOOL_CALL, LLM_REQUEST, and REQUEST block before the action proceeds
         # (tool dispatch / LLM call / a native session's user prompt via the
-        # UserPromptSubmit hook — which has no ASK primitive of its own).
-        # TOOL_RESULT runs *after* the tool executed, but a native harness that
-        # can intercept the result before the model consumes it (pi-native's
-        # ``tool_result`` extension hook can replace/suppress the result) still
-        # needs the human verdict resolved here: its only ASK primitive is this
-        # same long-poll, so park TOOL_RESULT too and collapse to ALLOW (return
-        # the result) / DENY (suppress it). The native hooks that *cannot*
-        # intercept a committed result (Claude/Codex PostToolUse) surface DENY
-        # as advisory context and never POST a TOOL_RESULT ASK that needs
-        # parking, so adding TOOL_RESULT here is inert for them.
-        if result.action == PolicyAction.ASK and phase in _NATIVE_ASK_GATE_PHASES:
+        # UserPromptSubmit hook — which has no ASK primitive of its own), so
+        # they park for every native caller. TOOL_RESULT runs *after* the tool
+        # executed; parking its ASK only makes sense for a harness that can
+        # intercept the result before the model consumes it (pi-native's
+        # ``tool_result`` extension hook can replace/suppress the result —
+        # ALLOW returns it, DENY suppresses it). The other native harnesses
+        # post a *committed* result via PostToolUse (which maps to
+        # PHASE_TOOL_RESULT) that can only be annotated, never suppressed, so
+        # parking their result-phase ASK would stall the turn on an approval
+        # that cannot change the output — therefore TOOL_RESULT is gated here
+        # ONLY for the pi-native harness (see ``_native_ask_gate_phases``);
+        # every other caller falls through to the raw verdict, which
+        # ``evaluation_response_to_hook_output(PostToolUse, ASK)`` discards as
+        # a no-op.
+        #
+        # Resolved lazily (only when the verdict is ASK) so the common
+        # ALLOW/DENY path skips the harness lookup.
+        ask_gate_phases = (
+            _native_ask_gate_phases(_resolve_harness(conv))
+            if result.action == PolicyAction.ASK
+            else ()
+        )
+        if result.action == PolicyAction.ASK and phase in ask_gate_phases:
             if is_read_only:
                 # Read-only callers must not enter the ASK gate — parking
                 # creates an elicitation (a server-side mutation). Return
@@ -14757,7 +14805,7 @@ def create_sessions_router(
                 async with _native_ask_gate_lock(session_id, result.deciding_policy):
                     engine = _build_engine()
                     result = await engine.evaluate(ctx, read_only=is_read_only)
-                    if result.action == PolicyAction.ASK and phase in _NATIVE_ASK_GATE_PHASES:
+                    if result.action == PolicyAction.ASK and phase in ask_gate_phases:
                         approved = await _hold_native_ask_gate(
                             request,
                             session_id=session_id,
