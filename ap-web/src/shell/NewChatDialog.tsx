@@ -1239,9 +1239,11 @@ export function NewChatLandingScreen() {
   const workspaceLabel = workspaceTrimmed
     ? (workspaceTrimmed.split("/").filter(Boolean).pop() ?? workspaceTrimmed)
     : "Working directory";
-  const hostLabel = sandboxSelected
-    ? sandboxLabel
-    : (selectedHost?.name ?? (onlineHosts.length === 0 ? "No hosts" : "Select host"));
+  const hostLabel = connectingThisMachine
+    ? "Connecting…"
+    : sandboxSelected
+      ? sandboxLabel
+      : (selectedHost?.name ?? (onlineHosts.length === 0 ? "No hosts" : "Select host"));
   const worktreeLabel = branchName.trim() || "No worktree";
   // Sandbox repository chip label: repo name (server's clone-dir rule)
   // plus the pinned branch, e.g. "repo#main"; placeholder when unset.
@@ -1866,7 +1868,7 @@ export function NewChatLandingScreen() {
                       <MonitorIcon className="size-4 shrink-0" />
                     )}
                     <span
-                      className={`max-w-32 truncate ${sandboxSelected || selectedHost != null ? "text-foreground" : ""}`}
+                      className={`max-w-32 truncate ${sandboxSelected || selectedHost != null || connectingThisMachine ? "text-foreground" : ""}`}
                     >
                       {hostLabel}
                     </span>
