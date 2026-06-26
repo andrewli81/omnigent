@@ -107,7 +107,7 @@ def clone_hermes_session(
     target_session_id: str,
     *,
     workspace: str | None = None,
-) -> None:
+) -> int:
     """Clone a Hermes session from *source_db* into *target_db* under a new id.
 
     Copies the entire source database (preserving whatever schema Hermes uses)
@@ -138,14 +138,14 @@ def clone_hermes_session(
             "Source hermes state.db at %s is unreadable; skipping clone",
             source_db,
         )
-        return
+        return 0
     if row is None:
         _logger.warning(
             "Source hermes session %s not found in %s; skipping clone",
             source_session_id,
             source_db,
         )
-        return
+        return 0
 
     target_db.parent.mkdir(parents=True, exist_ok=True)
     # Use SQLite's backup API instead of shutil.copy2 — Hermes uses WAL mode
@@ -185,9 +185,19 @@ def clone_hermes_session(
         conn.execute("DELETE FROM sessions WHERE id != ?", (target_session_id,))
         conn.execute("DELETE FROM messages WHERE session_id != ?", (target_session_id,))
 
+        # Record the high-water message id so the forwarder skips cloned
+        # messages (Omnigent already has them from the fork item copy).
+        max_id_row = conn.execute(
+            "SELECT MAX(id) FROM messages WHERE session_id = ?",
+            (target_session_id,),
+        ).fetchone()
+        max_id = max_id_row[0] if max_id_row and max_id_row[0] is not None else 0
+
         conn.commit()
     finally:
         conn.close()
+
+    return max_id
 
 
 def bridge_dir_for_session_id(session_id: str) -> Path:

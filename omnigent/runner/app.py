@@ -2440,7 +2440,7 @@ async def _auto_create_hermes_terminal(
             _target_db = _hermes_home_path / "state.db" if _hermes_home_path else None
             if _target_db is not None:
                 try:
-                    await asyncio.to_thread(
+                    _clone_max_id = await asyncio.to_thread(
                         clone_hermes_session,
                         _source_db,
                         _target_db,
@@ -2449,6 +2449,23 @@ async def _auto_create_hermes_terminal(
                         workspace=workspace,
                     )
                     hermes_args.extend(["--resume", _target_session_id])
+                    # Pre-seed the forwarder cursor past cloned messages so
+                    # the forwarder only mirrors NEW messages (Omnigent already
+                    # has the cloned ones from the fork item copy).
+                    if _clone_max_id > 0:
+                        from omnigent.hermes_native_forwarder import (
+                            _ForwardState,
+                            _write_state,
+                        )
+
+                        _write_state(
+                            bridge_dir,
+                            _ForwardState(
+                                hermes_session_id=_target_session_id,
+                                last_id=_clone_max_id,
+                                launch_epoch_s=launch_epoch_s,
+                            ),
+                        )
                     _logger.info(
                         "Cloned hermes session %s -> %s for fork; session=%s",
                         launch_config.fork_source_external_id,
