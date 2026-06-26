@@ -601,6 +601,55 @@ function followLocalServerMove(event, oldServerUrl, newUrl) {
 }
 
 /**
+ * Connect this machine as a host for a server at connect time (the setup page's
+ * "Connect this machine as a runner" toggle). Ensures CLI auth first (remote
+ * servers), then connects. Failures are surfaced via an OS notification (the
+ * only feedback channel that works regardless of the server's SPA version) and
+ * logged — never silently swallowed.
+ *
+ * @param {string} serverUrl
+ * @returns {Promise<void>}
+ */
+async function connectHostAtConnectTime(serverUrl) {
+  const cliPath = resolvedCliPath();
+  if (!cliPath) {
+    console.warn("[omnigent] runner connect skipped: omnigent CLI not found");
+    notifyRunnerConnectFailure("The omnigent CLI was not found. Install it or set its path.");
+    return;
+  }
+  const auth = await serverManager.ensureServerAuth(cliPath, serverUrl);
+  if (!auth.ok) {
+    console.warn("[omnigent] runner connect:", auth.error);
+    notifyRunnerConnectFailure(auth.error);
+    broadcastHostStatus();
+    return;
+  }
+  const result = await serverManager.ensureHostConnected(cliPath, serverUrl);
+  if (!result.ok) {
+    console.warn("[omnigent] runner connect failed:", result.error);
+    notifyRunnerConnectFailure(result.error);
+  }
+  broadcastHostStatus();
+}
+
+/**
+ * Surface a runner-connect failure as an OS notification — the connect happens
+ * after the setup page has navigated away, and an old server SPA has no in-app
+ * host indicator, so this is the only reliable feedback.
+ *
+ * @param {string | undefined} error
+ */
+function notifyRunnerConnectFailure(error) {
+  if (!Notification.isSupported()) return;
+  const body = (error || "").split("\n")[0].slice(0, 240) || "This machine could not connect.";
+  try {
+    new Notification({ title: "Couldn't connect this machine as a runner", body }).show();
+  } catch {
+    // Notification construction can throw on some platforms; nothing to do.
+  }
+}
+
+/**
  * Notify every pinned window that host/server status may have changed, so the
  * SPA re-reads it. This is a bare ping — NOT a poll: it fires only on real
  * events (a host child connecting or exiting, and after a control action), so
@@ -1592,19 +1641,13 @@ function registerIpc() {
             saveSettings(settings);
           }
           // Start hosting only after the server actually responded, so we never
-          // spawn a host for a typo'd / unreachable URL. Best-effort: a failure
-          // surfaces in the sidebar host indicator, not as a connect error.
+          // spawn a host for a typo'd / unreachable URL. Ensures CLI auth first
+          // (remote servers) and reports failures via notification + log.
           // Remembered (host_servers) so it's restored on the next launch —
           // except for ephemeral windows, whose connections are never saved.
           if (host) {
             if (!ephemeral) setHostServerEnabled(target, true);
-            const cliPath = resolvedCliPath();
-            if (cliPath) {
-              serverManager
-                .ensureHostConnected(cliPath, target)
-                .then(broadcastHostStatus)
-                .catch(() => {});
-            }
+            void connectHostAtConnectTime(target);
           }
         })
         .catch(() => {
