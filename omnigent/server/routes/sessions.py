@@ -5067,9 +5067,17 @@ async def _recover_subagent_status_forward_via_parent(
         # Heal the divergence so this child's id matches the live runner: the
         # next forward resolves directly and a future ``_on_runner_connect``
         # (which rebinds by matching runner_id) can recover it.
-        await asyncio.to_thread(
-            conversation_store.replace_runner_id, child_conv.id, parent_runner_id
-        )
+        try:
+            await asyncio.to_thread(
+                conversation_store.replace_runner_id, child_conv.id, parent_runner_id
+            )
+        except ConversationNotFoundError:
+            # The child was deleted between ``post_event`` reading it and this
+            # heal (e.g. the session was removed mid-teardown). Recovery is
+            # strictly best-effort — degrade to ``None`` so the caller falls
+            # through to the existing 503/no-op rather than surfacing this
+            # benign race as an unhandled 500.
+            return None
     return await _forward_session_change_to_runner(
         child_conv.id,
         runner_router,

@@ -19,6 +19,7 @@ from omnigent.server.routes.sessions import (
     _recover_subagent_status_forward_via_parent,
     _RunnerForwardResult,
 )
+from omnigent.stores.conversation_store import ConversationNotFoundError
 
 
 def _conv(
@@ -40,8 +41,9 @@ def _conv(
 class _FakeStore:
     """Records ``replace_runner_id`` calls and serves a fixed parent."""
 
-    def __init__(self, parent: Any | None) -> None:
+    def __init__(self, parent: Any | None, *, raise_on_rebind: bool = False) -> None:
         self._parent = parent
+        self._raise_on_rebind = raise_on_rebind
         self.rebinds: list[tuple[str, str]] = []
 
     def get_conversation(self, conversation_id: str) -> Any | None:
@@ -50,6 +52,10 @@ class _FakeStore:
         return None
 
     def replace_runner_id(self, conversation_id: str, runner_id: str) -> Any:
+        if self._raise_on_rebind:
+            # Simulate the child row being deleted between post_event reading
+            # it and this heal (a mid-teardown race).
+            raise ConversationNotFoundError(conversation_id)
         self.rebinds.append((conversation_id, runner_id))
         return _conv(conversation_id, runner_id=runner_id)
 
@@ -188,6 +194,35 @@ async def test_recover_same_runner_skips_rebind_but_retries(
     assert result is not None and result.status_code == 202
     assert store.rebinds == []  # same id → no rebind
     assert _patch_forward_and_wait["forwarded_with"] == ["conv_child"]
+
+
+async def test_recover_deleted_child_race_degrades_to_none(
+    _patch_forward_and_wait: dict[str, Any],
+) -> None:
+    """
+    A child deleted mid-heal degrades to ``None`` (→ 503), never a 500.
+
+    If the child row is removed between ``post_event`` reading it and the
+    rebind, ``replace_runner_id`` raises ``ConversationNotFoundError``. Recovery
+    is best-effort: it must swallow that benign race and return ``None`` so the
+    caller falls through to the existing 503/no-op, not surface an unhandled
+    500. (Polly review note on PR #1446.)
+    """
+    child = _conv("conv_child", runner_id="runner_old", parent_id="conv_parent")
+    store = _FakeStore(_conv("conv_parent", runner_id="runner_new"), raise_on_rebind=True)
+
+    result = await _recover_subagent_status_forward_via_parent(
+        child,
+        runner_router=None,
+        tunnel_registry=object(),
+        conversation_store=store,  # type: ignore[arg-type]
+        forward_body={"type": "external_session_status", "data": {"status": "idle"}},
+    )
+
+    assert result is None
+    assert store.rebinds == []
+    # The deleted-child race short-circuits before any retry forward.
+    assert _patch_forward_and_wait["forwarded_with"] == []
 
 
 async def test_recover_falls_back_to_root_when_no_direct_parent(
