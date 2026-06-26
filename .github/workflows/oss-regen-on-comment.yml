@@ -96,23 +96,20 @@ jobs:
               -f content=eyes --silent || true
           fi
 
-  regen:
-    permissions:
-      contents: write      # push the regenerated lockfiles to the PR branch
-      pull-requests: write # post status comments
-      issues: write        # comment the result on the PR thread
+  # Unprivileged job: checks out the PR branch and runs `uv lock` / `npm install`.
+  # permissions: {} ensures no GITHUB_TOKEN or secrets are available, so even if
+  # a PR's build backend is malicious it cannot exfiltrate credentials.  The
+  # generated lockfiles are uploaded as artifacts for the privileged push job.
+  generate:
+    permissions: {}          # no token, no secrets — safe to run untrusted code
     needs: authorize
     if: needs.authorize.outputs.ok == 'true' && needs.authorize.outputs.cross == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # One regen per PR at a time; a second /regen waits rather than racing a push.
     concurrency:
       group: oss-regen-comment-${{ github.event.issue.number }}
       cancel-in-progress: false
     steps:
-      # No token / no persisted credentials: `uv lock` can execute PR-chosen
-      # build backends, which must not find a push token on disk. The App token
-      # is minted only after `uv lock` and enters only at the push step.
       - name: Checkout the PR branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -150,9 +147,43 @@ jobs:
           uv lock
           ( cd ap-web && rm -f package-lock.json && npm install --package-lock-only --legacy-peer-deps --no-audit --no-fund )
 
-      # Mint the App token only AFTER `uv lock` so untrusted PR build backends
-      # never see it. Skipped when the App isn't configured (push then falls back
-      # to GITHUB_TOKEN and a maintainer must re-push to run CI).
+      - name: Upload regenerated lockfiles
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: regenerated-lockfiles
+          path: |
+            uv.lock
+            ap-web/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Privileged job: downloads lockfile artifacts from the unprivileged generate
+  # job and pushes them to the PR branch.  Never checks out untrusted code.
+  push:
+    permissions:
+      contents: write      # push the regenerated lockfiles to the PR branch
+      pull-requests: write # post status comments
+      issues: write        # comment the result on the PR thread
+    needs: [authorize, generate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: oss-regen-comment-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      # Checkout the PR branch (trusted — same-repo only, verified by authorize).
+      # persist-credentials: false because we use an App token for the push.
+      - name: Checkout the PR branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ needs.authorize.outputs.head }}
+          persist-credentials: false
+
+      - name: Download regenerated lockfiles
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: regenerated-lockfiles
+
       - name: Mint App token
         id: app-token
         if: vars.OMNIGENT_BOT_APP_ID != ''
