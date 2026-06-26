@@ -94,14 +94,17 @@ export function RestartWithModelDialog({
         <DialogHeader>
           <DialogTitle>Restart with model…</DialogTitle>
           <DialogDescription>
-            Starts a new session on the chosen model, carrying this
-            conversation's history. The model applies at launch — Codex can't
-            switch model mid-turn. Your current session is left untouched.
+            Starts a new session on the chosen model, carrying this conversation's history. The
+            model applies at launch — Codex can't switch model mid-turn. Your current session is
+            left untouched.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="restart-model-input" className="text-xs font-medium text-muted-foreground">
+          <label
+            htmlFor="restart-model-input"
+            className="text-xs font-medium text-muted-foreground"
+          >
             Model
           </label>
           <Input
