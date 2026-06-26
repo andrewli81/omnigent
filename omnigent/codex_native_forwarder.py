@@ -5035,9 +5035,12 @@ async def _persist_codex_compaction_item(
 ) -> None:
     """Persist a compaction boundary item to the conversation store.
 
-    Reads all persisted items from the server to use as
-    ``compacted_messages`` — these represent the full conversation
-    state at the compaction boundary and enable transcript rebuild.
+    Codex compacts its context internally and the forwarder cannot
+    read the post-compaction state (it uses an app-server WebSocket
+    protocol, not files). The boundary marker (``last_item_id``) is
+    persisted so ``_load_initial_history`` knows to skip pre-compaction
+    items on resume. Without ``compacted_messages``, the synthetic
+    summary pair fallback is used.
     """
     resp = await client.get(
         f"/v1/sessions/{session_id}/items",
@@ -5047,63 +5050,17 @@ async def _persist_codex_compaction_item(
     items = resp.json().get("data", [])
     last_item_id = items[0]["id"] if items else f"compact_boundary_{session_id}"
 
-    # Read all persisted items to include as compacted_messages.
-    compacted_messages = None
-    try:
-        all_resp = await client.get(
-            f"/v1/sessions/{session_id}/items",
-            params={"limit": 500, "order": "asc"},
-        )
-        all_resp.raise_for_status()
-        all_items = all_resp.json().get("data", [])
-        msgs = []
-        for item in all_items:
-            item_type = item.get("type")
-            if item_type == "message":
-                msgs.append(
-                    {
-                        "type": "message",
-                        "role": item.get("role", "user"),
-                        "content": item.get("content", []),
-                    }
-                )
-            elif item_type == "function_call":
-                msgs.append(
-                    {
-                        "type": "function_call",
-                        "call_id": item.get("call_id"),
-                        "name": item.get("name"),
-                        "arguments": item.get("arguments"),
-                    }
-                )
-            elif item_type == "function_call_output":
-                msgs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": item.get("call_id"),
-                        "output": item.get("output"),
-                    }
-                )
-        if msgs:
-            compacted_messages = msgs
-    except Exception:  # noqa: BLE001
-        _logger.debug(
-            "Failed to read items for codex compaction persist",
-            exc_info=True,
-        )
-
-    compaction_data: dict[str, object] = {
-        "summary": "[Codex compaction — context was compacted in the terminal]",
-        "last_item_id": last_item_id,
-        "model": "unknown",
-        "token_count": 0,
-    }
-    if compacted_messages:
-        compaction_data["compacted_messages"] = compacted_messages
-
     resp = await client.post(
         f"/v1/sessions/{session_id}/events",
-        json={"type": "compaction", "data": compaction_data},
+        json={
+            "type": "compaction",
+            "data": {
+                "summary": "[Codex compaction — context was compacted in the terminal]",
+                "last_item_id": last_item_id,
+                "model": "unknown",
+                "token_count": 0,
+            },
+        },
     )
     resp.raise_for_status()
 
