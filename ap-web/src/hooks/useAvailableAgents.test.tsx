@@ -121,8 +121,9 @@ describe("useAvailableAgents", () => {
         skills: [],
       },
     ]);
-    expect(fetchMock).toHaveBeenCalledWith("/v1/agents");
-    expect(fetchMock).toHaveBeenCalledWith("/v1/agents?after=ag_codex_fork");
+    const urls = fetchMock.mock.calls.map((c) => c[0] as string);
+    expect(urls).toContain("/v1/agents");
+    expect(urls).toContain("/v1/agents?after=ag_codex_fork");
   });
 
   it("maps rows into AvailableAgent and applies native, nessie, and debby display names", async () => {
