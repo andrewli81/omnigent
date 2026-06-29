@@ -5127,18 +5127,14 @@ def _read_compacted_history(rollout_path: Path) -> list[dict[str, object]] | Non
     history = payload.get("replacement_history")
     if not isinstance(history, list) or not history:
         return None
-    # Only keep items that don't already exist in our conversation
-    # store — the opaque compaction tokens ({type: "compaction",
-    # encrypted_content: "..."}). User/assistant messages are already
-    # persisted as individual msg_* items; storing them again in
-    # compacted_messages would be redundant.
-    tokens = [
-        item
-        for item in history
-        if isinstance(item, dict)
-        and item.get("type") not in ("message", "function_call", "function_call_output")
-    ]
-    return tokens or None
+    # Store the full replacement_history — messages + compaction
+    # tokens. Although the messages duplicate pre-compaction items
+    # in the conversation store, they are needed for rollout
+    # reconstruction (e.g. sandbox recovery where the rollout file
+    # is lost). The encrypted compaction token alone is not enough;
+    # the rollout's Compacted entry needs the complete
+    # replacement_history to reconstruct the context.
+    return [item for item in history if isinstance(item, dict)] or None
 
 
 async def _handle_reasoning_delta(
