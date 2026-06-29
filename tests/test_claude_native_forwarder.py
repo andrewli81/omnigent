@@ -6431,17 +6431,13 @@ def test_forward_failures_escalate_to_degraded_once() -> None:
 
     forwarder._note_forward_failure("item:source-1")  # crosses threshold
     assert forwarder._forward_health.degraded_logged is True
-    assert (
-        forwarder._forward_health.consecutive_failures
-        == forwarder._FORWARD_DEGRADED_THRESHOLD
-    )
+    assert forwarder._forward_health.consecutive_failures == forwarder._FORWARD_DEGRADED_THRESHOLD
 
     # The latch holds — further failures keep counting but don't re-escalate.
     forwarder._note_forward_failure("item:source-1")
     assert forwarder._forward_health.degraded_logged is True
     assert (
-        forwarder._forward_health.consecutive_failures
-        == forwarder._FORWARD_DEGRADED_THRESHOLD + 1
+        forwarder._forward_health.consecutive_failures == forwarder._FORWARD_DEGRADED_THRESHOLD + 1
     )
 
 
