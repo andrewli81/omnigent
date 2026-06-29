@@ -5064,7 +5064,7 @@ async def _persist_codex_compaction_item(
     items = resp.json().get("data", [])
     last_item_id = items[0]["id"] if items else f"compact_boundary_{session_id}"
 
-    compacted_messages = None
+    compacted = None
     if bridge_dir is not None:
         try:
             state = read_bridge_state(bridge_dir)
@@ -5077,7 +5077,7 @@ async def _persist_codex_compaction_item(
                     reverse=True,
                 )
                 if rollout_files:
-                    compacted_messages = _read_compacted_history(rollout_files[0])
+                    compacted = _read_compacted_history(rollout_files[0])
         except Exception:  # noqa: BLE001
             _logger.debug(
                 "Failed to read codex rollout for compaction persist",
@@ -5090,8 +5090,11 @@ async def _persist_codex_compaction_item(
         "model": "unknown",
         "token_count": 0,
     }
-    if compacted_messages:
-        data["compacted_messages"] = compacted_messages
+    if compacted is not None:
+        if compacted.get("replacement_history"):
+            data["compacted_messages"] = compacted["replacement_history"]
+        if compacted.get("window_id") is not None:
+            data["window_id"] = compacted["window_id"]
 
     resp = await client.post(
         f"/v1/sessions/{session_id}/events",
@@ -5100,15 +5103,15 @@ async def _persist_codex_compaction_item(
     resp.raise_for_status()
 
 
-def _read_compacted_history(rollout_path: Path) -> list[dict[str, object]] | None:
-    """Read ``replacement_history`` from the last ``Compacted`` entry in a rollout.
+def _read_compacted_history(rollout_path: Path) -> dict[str, object] | None:
+    """Read the last ``Compacted`` entry from a rollout JSONL.
 
-    Codex appends a ``{type: "compacted", payload: {replacement_history: [...]}}``
-    entry to the JSONL after compaction. The ``replacement_history`` contains the
-    post-compaction ``ResponseItem`` list — the actual context the model sees.
+    Codex appends a ``{type: "compacted", payload: {replacement_history: [...],
+    window_id: N}}`` entry after compaction. Returns a dict with
+    ``replacement_history`` and ``window_id`` for persistence, or ``None``.
 
     :param rollout_path: Path to the rollout JSONL.
-    :returns: List of message dicts from ``replacement_history``, or ``None``.
+    :returns: Dict with ``replacement_history`` and ``window_id``, or ``None``.
     """
     last_compacted = None
     with rollout_path.open() as f:
@@ -5131,10 +5134,11 @@ def _read_compacted_history(rollout_path: Path) -> list[dict[str, object]] | Non
     # tokens. Although the messages duplicate pre-compaction items
     # in the conversation store, they are needed for rollout
     # reconstruction (e.g. sandbox recovery where the rollout file
-    # is lost). The encrypted compaction token alone is not enough;
-    # the rollout's Compacted entry needs the complete
-    # replacement_history to reconstruct the context.
-    return [item for item in history if isinstance(item, dict)] or None
+    # is lost).
+    return {
+        "replacement_history": [item for item in history if isinstance(item, dict)],
+        "window_id": payload.get("window_id"),
+    }
 
 
 async def _handle_reasoning_delta(
