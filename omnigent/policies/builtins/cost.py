@@ -171,6 +171,7 @@ def _over_budget_deny_reason(
     policy_label: str = "session cost-budget",
     budget_label: str = "cost budget",
     subject_user: str | None = None,
+    block_all: bool = False,
 ) -> str:
     """Build the over-budget DENY reason for the budget gate.
 
@@ -219,12 +220,30 @@ def _over_budget_deny_reason(
         the session cost-budget output is unchanged.
     :returns: The DENY reason string.
     """
+    spend_subject = f"{subject_user}'s spend" if subject_user else "spend"
+    if block_all:
+        # All models are blocked (expensive_models=[]): no cheaper model exists
+        # to switch to, so the message is a hard stop with no switch hint.
+        verbatim = (
+            f"You've hit the ${max_cost_usd:.2f} {budget_label}. "
+            f"All model calls are blocked over budget."
+        )
+        if phase == "request":
+            return (
+                f"Blocked by the {policy_label} policy: {spend_subject} ${cost:.2f} reached the "
+                f"${max_cost_usd:.2f} limit. {verbatim}"
+            )
+        return (
+            f"Blocked by the {policy_label} policy: {spend_subject} ${cost:.2f} reached the "
+            f"${max_cost_usd:.2f} limit, and all further tool calls are blocked. Relay this to "
+            f"the user verbatim, then stop and wait for them — do not silently re-run the tool "
+            f'right now: "{verbatim}"'
+        )
     expensive_list = ", ".join(expensive_tokens) or "the configured high-cost models"
     if harness is not None and "codex" in harness:
         switch_hint = "in the terminal, run /model and pick a cheaper model to continue"
     else:
         switch_hint = "switch to a cheaper model to continue"
-    spend_subject = f"{subject_user}'s spend" if subject_user else "spend"
     verbatim = (
         f"You've hit the ${max_cost_usd:.2f} {budget_label}. High-cost models "
         f"({expensive_list}) are blocked over budget — {switch_hint}."
@@ -250,6 +269,8 @@ def _model_blocked_over_budget(
     model: str | None,
     expensive_tokens: tuple[str, ...],
     exclude_tokens: tuple[str, ...] = (),
+    *,
+    block_all: bool = False,
 ) -> bool:
     """Decide whether the active model is blocked once over budget.
 
@@ -268,6 +289,9 @@ def _model_blocked_over_budget(
     token (``"gpt-5"``) cover a whole family while exempting its cheap
     variants.
 
+    When ``block_all=True`` (``expensive_models=[]`` was passed to the
+    factory) every model is blocked — the budget is a true hard stop.
+
     :param model: The active model id, or ``None`` when
         undeterminable.
     :param expensive_tokens: Lowercased substring tokens identifying
@@ -275,8 +299,12 @@ def _model_blocked_over_budget(
     :param exclude_tokens: Lowercased substring tokens that override an
         expensive match back to "not expensive", e.g.
         ``("-mini", "-nano")``. Defaults to empty (no exclusions).
+    :param block_all: When ``True``, return ``True`` for every model
+        (``expensive_models=[]`` semantics — all models blocked).
     :returns: ``True`` when tool calls should be DENYed over budget.
     """
+    if block_all:
+        return True
     if model is None:
         return True
     low = model.lower()
@@ -296,13 +324,20 @@ class _ExpensiveModelConfig:
         "-nano")``. Non-empty only for the built-in default set; empty
         when the caller supplies an explicit ``expensive_models`` list.
     :param hard_cap_enabled: Whether the hard over-budget DENY gate is
-        active. ``False`` only when the caller passes an empty
-        ``expensive_models`` list (soft thresholds only).
+        active. Always ``True`` — including when the caller passes an
+        empty ``expensive_models`` list, which means *all* models are
+        blocked once over budget (see ``block_all_models``).
+    :param block_all_models: When ``True`` (set only when the caller
+        passes ``expensive_models=[]``) every model — not just a named
+        expensive tier — is blocked once the hard limit is reached.
+        ``_model_blocked_over_budget`` short-circuits to ``True``
+        regardless of the active model id.
     """
 
     expensive_tokens: tuple[str, ...]
     exclude_tokens: tuple[str, ...]
     hard_cap_enabled: bool
+    block_all_models: bool = False
 
 
 def _resolve_expensive_models(expensive_models: list[str] | None) -> _ExpensiveModelConfig:
@@ -318,7 +353,9 @@ def _resolve_expensive_models(expensive_models: list[str] | None) -> _ExpensiveM
     - a non-empty list → those tokens (lowercased), matched literally
       with NO exclusions (the caller controls the set exactly); hard gate
       on.
-    - ``[]`` → no expensive tokens; hard gate off (soft thresholds only).
+    - ``[]`` → **all models blocked** once over budget (``block_all_models=True``,
+      hard gate on). This is a true hard stop: no model can continue once
+      the limit is reached, instead of just being a downgrade gate.
 
     :param expensive_models: The factory argument, e.g.
         ``["opus", "gpt-5"]``, ``None``, or ``[]``.
@@ -335,10 +372,20 @@ def _resolve_expensive_models(expensive_models: list[str] | None) -> _ExpensiveM
         if not isinstance(m, str) or not m:
             raise ValueError(f"each expensive_models value must be a non-empty string, got {m!r}")
     expensive_tokens = tuple(m.lower() for m in expensive_models)
+    if not expensive_tokens:
+        # Empty list → block all models once over budget (hard stop, not just a
+        # downgrade gate). hard_cap_enabled stays True; block_all_models signals
+        # _model_blocked_over_budget to short-circuit to True for any model.
+        return _ExpensiveModelConfig(
+            expensive_tokens=(),
+            exclude_tokens=(),
+            hard_cap_enabled=True,
+            block_all_models=True,
+        )
     return _ExpensiveModelConfig(
         expensive_tokens=expensive_tokens,
         exclude_tokens=(),
-        hard_cap_enabled=len(expensive_tokens) > 0,
+        hard_cap_enabled=True,
     )
 
 
@@ -378,9 +425,10 @@ def cost_budget(
         ``"databricks-claude-opus-4-8"`` and the alias ``"opus"``).
         ``None`` uses the built-in default (Fable + Opus + GPT-5,
         excluding the cheap ``-mini`` / ``-nano`` variants). An explicit
-        list is matched literally with no exclusions. ``[]`` disables the
-        hard gate entirely (soft thresholds only, no budget block). Each
-        value must be a non-empty string.
+        list is matched literally with no exclusions. ``[]`` makes the
+        hard cap a true hard stop: **all** models are blocked once the
+        limit is reached (not just a downgrade gate). Each value must be
+        a non-empty string.
     :returns: A policy callable implementing the budget gate.
     :raises ValueError: If *max_cost_usd* is not positive, any
         *ask_thresholds_usd* value is not in ``(0, max_cost_usd)``, or
@@ -429,7 +477,10 @@ def cost_budget(
         cost = _session_cost_usd(event)
         if cfg.hard_cap_enabled and cost >= max_cost_usd:
             if _model_blocked_over_budget(
-                _current_model(event), cfg.expensive_tokens, cfg.exclude_tokens
+                _current_model(event),
+                cfg.expensive_tokens,
+                cfg.exclude_tokens,
+                block_all=cfg.block_all_models,
             ):
                 return {
                     "result": "DENY",
@@ -439,6 +490,7 @@ def cost_budget(
                         cfg.expensive_tokens,
                         _current_harness(event),
                         phase=phase,
+                        block_all=cfg.block_all_models,
                     ),
                 }
             # Already on a cheaper model — the downgrade gate is satisfied.
@@ -560,8 +612,9 @@ def user_daily_cost_budget(
         for the model tiers blocked once over the daily limit. ``None``
         uses the built-in default (Fable + Opus + GPT-5, excluding the
         cheap ``-mini`` / ``-nano`` variants); an explicit list is
-        matched literally with no exclusions; ``[]`` disables the hard
-        gate (soft thresholds only).
+        matched literally with no exclusions; ``[]`` makes the hard cap a
+        true hard stop — all models are blocked once the limit is
+        reached.
     :returns: A policy callable implementing the per-user daily budget.
     :raises ValueError: Same validation as :func:`cost_budget`.
     """
@@ -596,7 +649,10 @@ def user_daily_cost_budget(
         owner = _user_daily_owner(event)
         if cfg.hard_cap_enabled and cost >= max_cost_usd:
             if _model_blocked_over_budget(
-                _current_model(event), cfg.expensive_tokens, cfg.exclude_tokens
+                _current_model(event),
+                cfg.expensive_tokens,
+                cfg.exclude_tokens,
+                block_all=cfg.block_all_models,
             ):
                 return {
                     "result": "DENY",
@@ -609,6 +665,7 @@ def user_daily_cost_budget(
                         policy_label="per-user daily cost-budget",
                         budget_label="daily cost budget",
                         subject_user=owner,
+                        block_all=cfg.block_all_models,
                     ),
                 }
             return _ALLOW
@@ -731,7 +788,10 @@ def subagent_cost_budget(
         # Check hard limit if max_cost_usd is set.
         if max_cost_usd is not None and cfg.hard_cap_enabled and cost >= max_cost_usd:
             if _model_blocked_over_budget(
-                _current_model(event), cfg.expensive_tokens, cfg.exclude_tokens
+                _current_model(event),
+                cfg.expensive_tokens,
+                cfg.exclude_tokens,
+                block_all=cfg.block_all_models,
             ):
                 return {
                     "result": "DENY",
@@ -743,6 +803,7 @@ def subagent_cost_budget(
                         phase=phase,
                         policy_label="subagent cost-budget",
                         budget_label="subagent cost budget",
+                        block_all=cfg.block_all_models,
                     ),
                 }
             return _ALLOW
@@ -805,8 +866,8 @@ POLICY_REGISTRY: list[dict[str, Any]] = [
                     "items": {"type": "string"},
                     "description": "Optional case-insensitive substring tokens for the model "
                     "tiers blocked once over budget (default: Fable + Opus + GPT-5, excluding "
-                    "the cheap -mini/-nano variants). An empty list disables the hard limit, "
-                    "leaving only the soft thresholds.",
+                    "the cheap -mini/-nano variants). An empty list blocks all models once the "
+                    "limit is reached (true hard stop, not just a downgrade gate).",
                 },
             },
             "required": ["max_cost_usd"],
@@ -842,8 +903,8 @@ POLICY_REGISTRY: list[dict[str, Any]] = [
                     "items": {"type": "string"},
                     "description": "Optional case-insensitive substring tokens for the model "
                     "tiers blocked once over the daily budget (default: Fable + Opus + GPT-5, "
-                    "excluding the cheap -mini/-nano variants). An empty list disables the hard "
-                    "limit, leaving only the soft thresholds.",
+                    "excluding the cheap -mini/-nano variants). An empty list blocks all models "
+                    "once the limit is reached (true hard stop, not just a downgrade gate).",
                 },
             },
             "required": ["max_cost_usd"],

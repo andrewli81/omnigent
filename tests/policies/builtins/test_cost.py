@@ -350,19 +350,22 @@ def test_explicit_expensive_models_apply_no_mini_nano_exclusion() -> None:
     assert policy(_tool(6.0, model="gpt-5-nano"))["result"] == "DENY"
 
 
-def test_empty_expensive_models_disables_hard_gate() -> None:
-    """``expensive_models=[]`` disables the hard gate (soft thresholds only).
+def test_empty_expensive_models_blocks_all_models() -> None:
+    """``expensive_models=[]`` makes the hard cap a true hard stop for all models.
 
-    Over budget on Opus must NOT be hard-DENYed (no model is blocked);
-    with the soft checkpoint already approved it ALLOWs. The soft ASK
-    still fires below the limit — proving the empty list scopes off only
-    the hard block, not the whole policy.
+    Over budget on any model — cheap or expensive — must be hard-DENYed.
+    The DENY reason must say "All model calls are blocked" (no switch hint).
+    The soft ASK still fires below the limit.
     """
     policy = cost_budget(max_cost_usd=5.0, ask_thresholds_usd=[2.0], expensive_models=[])
-    # Over budget on Opus, checkpoint already approved → ALLOW (no hard DENY).
-    assert policy(_tool(6.0, model="opus", session_state={_ASK_APPROVED_KEY: 2.0})) == {
-        "result": "ALLOW"
-    }
+    # Over budget on Opus → DENY (all models blocked).
+    result = policy(_tool(6.0, model="opus", session_state={_ASK_APPROVED_KEY: 2.0}))
+    assert result["result"] == "DENY"
+    assert "All model calls are blocked" in result["reason"]
+    # Over budget on a cheap model → also DENY.
+    result_cheap = policy(_tool(6.0, model="haiku"))
+    assert result_cheap["result"] == "DENY"
+    assert "All model calls are blocked" in result_cheap["reason"]
     # Soft checkpoint still asks below the limit.
     assert policy(_tool(2.0, model="opus"))["result"] == "ASK"
 
