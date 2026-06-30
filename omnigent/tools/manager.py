@@ -455,15 +455,11 @@ class ToolManager:
         # Model awareness pairs with the dispatch grant: the per-worker
         # listing exists to pick a valid ``args.model`` for send.
         self._tools[SysListModelsTool.name()] = SysListModelsTool(spec=self._spec)
-        # Advise-models pairs with send: available only when smart routing
-        # is enabled (OMNIGENT_SMART_ROUTING=1 + llm: config).
-        try:
-            from omnigent.runtime._globals import _caps
-
-            if _caps is not None and _caps.routing_client is not None:
-                self._tools[SysAdviseModelsTool.name()] = SysAdviseModelsTool()
-        except ImportError:
-            pass
+        # Advise-models pairs with the dispatch grant. Always registered
+        # when tools.agents is declared — the server's MCP intercept
+        # handles the router_on:false case when routing is off, so the
+        # schema is safe to advertise unconditionally.
+        self._tools[SysAdviseModelsTool.name()] = SysAdviseModelsTool()
 
         # create: spawning OUTSIDE the declared list (existing agents
         # by id, or custom bundles via config_path) requires the
