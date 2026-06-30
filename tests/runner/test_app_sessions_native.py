@@ -13413,6 +13413,11 @@ async def test_auto_create_kiro_terminal_launches_required_terminal_with_isolate
     async def _fake_supervise_kiro_permission_mirror(**kwargs: Any) -> None:
         permission_mirror_calls.append(kwargs)
 
+    relay_calls: list[dict[str, Any]] = []
+
+    async def _spy_ensure_relay(session_id: str, **kwargs: Any) -> None:
+        relay_calls.append({"session_id": session_id, **kwargs})
+
     monkeypatch.setattr(
         "omnigent.kiro_native_session_forwarder.supervise_kiro_session_forwarder",
         _fake_supervise_kiro_session_forwarder,
@@ -13468,6 +13473,7 @@ async def test_auto_create_kiro_terminal_launches_required_terminal_with_isolate
         _FakeResourceRegistry(),  # type: ignore[arg-type]
         lambda _sid, evt: published.append(evt),
         server_client=NullServerClient(),  # type: ignore[arg-type]
+        ensure_comment_relay=_spy_ensure_relay,
     )
     for _ in range(20):
         if forwarder_calls and permission_mirror_calls:
@@ -13510,6 +13516,19 @@ async def test_auto_create_kiro_terminal_launches_required_terminal_with_isolate
     assert permission_mirror_calls
     assert permission_mirror_calls[0]["base_url"] == "http://127.0.0.1:6767"
     assert permission_mirror_calls[0]["session_id"] == "conv_kiro"
+    # The Omnigent MCP tool relay is seeded for this session's bridge dir.
+    assert relay_calls == [
+        {
+            "session_id": "conv_kiro",
+            "explicit_bridge_dir": kiro_native_bridge.bridge_dir_for_session_id("conv_kiro"),
+            "await_notify": False,
+        }
+    ]
+    # And the Omnigent MCP server is declared in the workspace-scoped kiro config.
+    workspace_mcp = tmp_path / ".kiro" / "settings" / "mcp.json"
+    assert workspace_mcp.exists()
+    mcp_servers = json.loads(workspace_mcp.read_text())["mcpServers"]
+    assert "serve-mcp" in mcp_servers["omnigent"]["args"]
 
 
 @pytest.mark.asyncio
