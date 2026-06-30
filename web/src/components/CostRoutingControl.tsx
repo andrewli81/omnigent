@@ -118,38 +118,6 @@ export function ModelTierPill({ model, tier }: { model: string; tier: string }) 
   );
 }
 
-// Lucide "waypoints" geometry — a routing topology: four nodes joined by
-// connectors. Split so the on state fills the nodes and stages the
-// connector traces in separately.
-const WAYPOINT_NODES = [
-  { cx: 12, cy: 4.5 },
-  { cx: 4.5, cy: 12 },
-  { cx: 19.5, cy: 12 },
-  { cx: 12, cy: 19.5 },
-] as const;
-const WAYPOINT_TRACE_PATHS = ["m10.2 6.3-3.9 3.9", "M7 12h10", "m15.7 17.7-3.9-3.9"] as const;
-
-/** Muted outline waypoints — the resting (off) face of the toggle. */
-function SparkleOutline() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="size-4"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {WAYPOINT_NODES.map((n) => (
-        <circle key={`${n.cx}-${n.cy}`} cx={n.cx} cy={n.cy} r={2.5} />
-      ))}
-    </svg>
-  );
-}
-
-
 /**
  * The router glyph — Lucide's `brain-circuit` icon: a brain wired into
  * circuit nodes, reading as "model intelligence picks the route".
