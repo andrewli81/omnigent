@@ -343,10 +343,15 @@ async def route_turn(
     if _caps is None or _caps.routing_client is None:
         return None, None
 
-    # Prefer live runner catalog; fall back to static table.
+    # Prefer live runner catalog — but only the "self" worker entry.
+    # The catalog includes sub-agent workers (claude_code, pi, codex…);
+    # for brain-turn routing we only want the models this session's own
+    # harness can run, not the sub-agents' model lists.
     available: dict[str, list[str]] | None = None
     if session_id and runner_client is not None:
-        available = await fetch_runner_models(session_id, runner_client)
+        catalog = await fetch_runner_models(session_id, runner_client)
+        if catalog and "self" in catalog:
+            available = {"self": catalog["self"]}
     if not available:
         models = infer_models(harness)
         if models is None:

@@ -8652,6 +8652,8 @@ async def _forward_event_to_runner(
     _routing_enabled = (
         conv.cost_control_mode_override == "on" and conv.parent_conversation_id is None
     ) or _parent_routing_on
+    _routed_model: str | None = None
+    _verdict: dict[str, Any] | None = None
     if effective_runner_override is None and _routing_enabled and body.type == "message":
         from omnigent.server.smart_routing import route_turn
 
@@ -8681,14 +8683,6 @@ async def _forward_event_to_runner(
                         session_id,
                         exc_info=True,
                     )
-                # Emit the routing_decision transcript chip so the UI
-                # shows which model was picked, before the turn output.
-                await _emit_server_routing_decision(
-                    session_id,
-                    conversation_store,
-                    _routed_model,
-                    _verdict or {},
-                )
     # ────────────────────────────────────────────────────────────────
     if effective_runner_override is not None:
         runner_body["model_override"] = effective_runner_override
@@ -8709,6 +8703,16 @@ async def _forward_event_to_runner(
         # Publish input.consumed AFTER the forward succeeds —
         # the runner has the message and will start the turn.
         _publish_input_consumed(session_id, persisted_items[0])
+        # Emit the routing_decision chip AFTER input.consumed so the
+        # live SSE stream delivers the user bubble before the chip —
+        # matching the store order (user message was persisted first).
+        if _routed_model is not None and _verdict is not None:
+            await _emit_server_routing_decision(
+                session_id,
+                conversation_store,
+                _routed_model,
+                _verdict,
+            )
     except (httpx.HTTPError, ConnectionError):
         _logger.exception(
             "Forward to runner failed for session=%s; "
