@@ -67,11 +67,16 @@ class PolicyDenyProbe(CapabilityProbe):
                 detail=detail,
             )
         if not denied_delivered:
-            # A tool call happened but the harness never asked for a policy
-            # verdict — it does not route tool calls through the policy gate.
+            # A tool call happened but no policy_evaluation.requested was
+            # surfaced. Policy evaluation is normally driven by the server /
+            # runner; in this wrap-direct transport some harnesses (e.g.
+            # codex) dispatch the tool without emitting an evaluation hook, so
+            # we cannot exercise DENY here. That is a transport limitation,
+            # not proof the harness ignores policy — report SKIPPED, and let
+            # the full-server transport (phase-2) assert enforcement.
             return ProbeResult(
-                Verdict.UNSUPPORTED,
-                note="tool call not routed through a policy evaluation",
+                Verdict.SKIPPED,
+                note="no policy evaluation surfaced in the wrap-direct path (server-path concern)",
                 detail=detail,
             )
         # A DENY verdict was requested and delivered, and the turn advanced

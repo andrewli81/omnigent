@@ -15,13 +15,18 @@ from tests.harness_bench.probes.policy_deny import PolicyDenyProbe
 from tests.harness_bench.probes.streaming import StreamingProbe
 from tests.harness_bench.probes.tool_calling import ToolCallingProbe
 
+# Order is the report's column order AND the run order. basic_turn is first
+# (the prerequisite short-circuit). interrupt is LAST because cancelling a
+# turn can leave a harness's session mid-processing, which would contaminate
+# any probe that runs after it on the same shared session (e.g. pi rejecting
+# the next turn with "Agent is already processing").
 ALL_PROBES: list[CapabilityProbe] = [
     BasicTurnProbe(),
     StreamingProbe(),
     ToolCallingProbe(),
-    InterruptProbe(),
     PolicyDenyProbe(),
     ModelOverrideProbe(),
+    InterruptProbe(),
 ]
 
 __all__ = ["ALL_PROBES", "CapabilityProbe"]

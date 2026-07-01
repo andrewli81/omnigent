@@ -17,9 +17,17 @@ python -m tests.harness_bench
 # Live probe one harness against a gateway profile.
 python -m tests.harness_bench --harness codex --profile my-profile
 
-# Live probe every official harness, JSON out.
-python -m tests.harness_bench --profile my-profile --json
+# Live probe every official harness.
+python -m tests.harness_bench --profile my-profile
 ```
+
+Output formats (mutually exclusive):
+
+- default: an aligned, ANSI-colored terminal table (color auto-disables
+  when piped or with `--no-color`), followed by a Notes section explaining
+  every non-supported cell so a `·` is never opaque.
+- `--markdown`: the GitHub-flavored table for docs / PRs.
+- `--json`: machine-readable, for diffing runs or regenerating docs.
 
 A non-zero exit means a `DRIFT` cell was found (observed behavior
 disagrees with the declared matrix).

@@ -55,6 +55,9 @@ _INFRA_ERROR_MARKERS: tuple[str, ...] = (
     "502",
     "503",
     "504",
+    # Sequencing, not capability: a prior turn on the shared session had not
+    # fully settled. Reported SKIPPED so it never reads as a capability gap.
+    "already processing",
 )
 
 
@@ -80,6 +83,8 @@ def infra_failure_reason(result: TurnResult) -> str | None:
     for code in ("403", "401"):
         if code in text:
             return f"gateway auth failed ({code} Invalid/Forbidden token); re-login the profile"
+    if "already processing" in text:
+        return "session busy from a prior turn (sequencing, not a capability gap)"
     if "unexpected status" in text:
         return "gateway returned an unexpected status (environment/auth issue)"
     return "environment/connectivity error reaching the gateway"
@@ -103,6 +108,8 @@ class TurnResult:
         (one per ``policy_evaluation.requested``), so a probe can tell a
         DENY was actually delivered.
     :param completed: Whether a terminal ``response.completed`` was seen.
+    :param cancelled: Whether a terminal ``response.cancelled`` was seen
+        (the harness honored an interrupt).
     :param failed: Whether a terminal ``response.failed`` was seen.
     :param error: The error payload from ``response.failed``, if any.
     :param timed_out: Whether the stream did not reach a terminal event
@@ -116,9 +123,15 @@ class TurnResult:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     policy_actions: list[str] = field(default_factory=list)
     completed: bool = False
+    cancelled: bool = False
     failed: bool = False
     error: Any = None
     timed_out: bool = False
+
+    @property
+    def reached_terminal(self) -> bool:
+        """Whether the stream ended on any terminal event (done/cancelled/failed)."""
+        return self.completed or self.cancelled or self.failed
 
     @property
     def event_types(self) -> list[str]:
@@ -283,16 +296,27 @@ class SdkInprocDriver:
                             await self._post({"type": "interrupt"})
                     elif etype in _REASONING_DELTA_TYPES:
                         result.reasoning_delta_count += 1
-                    elif etype == "response.tool_call":
-                        result.tool_calls.append(event)
-                        if auto_tool_output is not None:
-                            await self._post(
-                                {
-                                    "type": "tool_result",
-                                    "call_id": event.get("call_id", ""),
-                                    "output": auto_tool_output,
-                                }
-                            )
+                    elif etype == "response.output_item.done":
+                        # Server-dispatched tool calls arrive as an
+                        # output_item.done carrying a function_call item with
+                        # status "action_required" (see _scaffold.dispatch_tool).
+                        # We must answer with a tool_result or the turn parks
+                        # forever waiting on the dispatch future.
+                        item = event.get("item") or {}
+                        if (
+                            item.get("type") == "function_call"
+                            and item.get("status") == "action_required"
+                        ):
+                            call_id = item.get("call_id", "")
+                            result.tool_calls.append(item)
+                            if auto_tool_output is not None:
+                                await self._post(
+                                    {
+                                        "type": "tool_result",
+                                        "call_id": call_id,
+                                        "output": auto_tool_output,
+                                    }
+                                )
                     elif etype == "policy_evaluation.requested":
                         verdict: dict[str, Any] = {
                             "type": "policy_verdict",
@@ -305,6 +329,8 @@ class SdkInprocDriver:
                         await self._post(verdict)
                     elif etype == "response.completed":
                         result.completed = True
+                    elif etype == "response.cancelled":
+                        result.cancelled = True
                     elif etype == "response.failed":
                         result.failed = True
                         result.error = event.get("error") or event.get("response", {}).get("error")

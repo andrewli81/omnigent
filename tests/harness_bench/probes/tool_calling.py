@@ -59,9 +59,19 @@ class ToolCallingProbe(CapabilityProbe):
                 Verdict.SKIPPED, note="timed out before any tool call", detail=detail
             )
         if not called:
+            # The turn ran without dispatching the offered tool. This is
+            # ambiguous: some harnesses (codex, openai-agents) accept a
+            # request-level tool and surface a server-dispatched call, while
+            # others (claude-sdk, pi) register tools via agent config / MCP
+            # and ignore the wire-level `tools` field. Not calling it here is
+            # therefore not proof the harness cannot call tools — report
+            # SKIPPED rather than a false UNSUPPORTED.
             return ProbeResult(
-                Verdict.UNSUPPORTED,
-                note="model never emitted a tool call for the offered tool",
+                Verdict.SKIPPED,
+                note=(
+                    "offered tool not dispatched "
+                    "(harness may register tools via config/MCP, not the request)"
+                ),
                 detail=detail,
             )
         if result.completed:

@@ -27,7 +27,7 @@ import sys
 from tests.harness_bench.bench import run_bench
 from tests.harness_bench.manifest import OFFICIAL_PROFILES
 from tests.harness_bench.profile import BenchProfile, resolve_profile
-from tests.harness_bench.report import render_json, render_markdown
+from tests.harness_bench.report import render_json, render_markdown, render_table
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -63,7 +63,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_false",
         help="Force the offline (declared-only) render.",
     )
-    parser.add_argument("--json", action="store_true", help="Emit JSON instead of Markdown.")
+    fmt = parser.add_mutually_exclusive_group()
+    fmt.add_argument(
+        "--markdown",
+        action="store_true",
+        help="Emit the GitHub-flavored Markdown table (for docs / PRs).",
+    )
+    fmt.add_argument("--json", action="store_true", help="Emit JSON.")
+    parser.add_argument(
+        "--no-color", action="store_true", help="Disable ANSI color in the terminal table."
+    )
     parser.add_argument("--list", action="store_true", help="List official harnesses and exit.")
     return parser.parse_args(argv)
 
@@ -108,7 +117,16 @@ def main(argv: list[str] | None = None) -> int:
             progress=_progress if live else None,
         )
     )
-    print(render_json(matrix) if args.json else render_markdown(matrix), end="")
+    if args.json:
+        output = render_json(matrix)
+    elif args.markdown:
+        output = render_markdown(matrix)
+    else:
+        # Default: terminal table. Color only when stdout is a real TTY and
+        # not suppressed, so piping to a file / pager stays plain.
+        color = sys.stdout.isatty() and not args.no_color
+        output = render_table(matrix, color=color)
+    print(output, end="")
     # A drift is a non-zero exit so CI / scripts notice without parsing output.
     return 1 if matrix.has_drift else 0
 

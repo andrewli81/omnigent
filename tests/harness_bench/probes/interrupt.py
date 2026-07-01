@@ -35,6 +35,7 @@ class InterruptProbe(CapabilityProbe):
         detail = {
             "chars": len(result.text),
             "completed": result.completed,
+            "cancelled": result.cancelled,
             "failed": result.failed,
             "timed_out": result.timed_out,
         }
@@ -47,24 +48,30 @@ class InterruptProbe(CapabilityProbe):
             note = infra or "turn produced no text before terminating; interrupt not exercised"
             return ProbeResult(Verdict.SKIPPED, note=note, detail=detail)
 
-        # An honored interrupt makes the stream reach a terminal event
-        # (completed or failed/cancelled) promptly — the driver's timeout
-        # did NOT fire — while having emitted only a fraction of the ~400
-        # word target (a full essay is well over 1200 chars).
-        reached_terminal = result.completed or result.failed
+        # The clearest signal: the harness emitted response.cancelled, i.e. it
+        # explicitly honored the interrupt.
+        if result.cancelled:
+            return ProbeResult(
+                Verdict.SUPPORTED,
+                note=f"turn cancelled after interrupt ({len(result.text)} chars streamed)",
+                detail=detail,
+            )
         if result.timed_out:
             return ProbeResult(
                 Verdict.UNSUPPORTED,
                 note="turn kept running after interrupt (timed out)",
                 detail=detail,
             )
-        if reached_terminal and len(result.text) < 800:
+        # No explicit cancel, but the turn reached a terminal event with only a
+        # fraction of the ~400-word target (a full essay is well over 1200
+        # chars) — the interrupt cut it short.
+        if result.reached_terminal and len(result.text) < 800:
             return ProbeResult(
                 Verdict.SUPPORTED,
                 note=f"turn stopped early after interrupt ({len(result.text)} chars)",
                 detail=detail,
             )
-        if reached_terminal:
+        if result.reached_terminal:
             # Terminated, but with a full-length body: the interrupt likely
             # landed after generation had already finished. Inconclusive.
             return ProbeResult(
