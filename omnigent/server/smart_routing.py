@@ -157,8 +157,6 @@ async def fetch_runner_models(
             continue
         ids = [m["id"] for m in models_raw if isinstance(m, dict) and isinstance(m.get("id"), str)]
         if ids:
-            # catalog_for_spec uses the harness resolved from the spec; the
-            # worker name (e.g. "self", "claude_code") is used as the key.
             result[worker_name] = ids
     return result or None
 
@@ -187,8 +185,7 @@ _JUDGE_SYSTEM_TEMPLATE = """\
 You are a model router for a coding assistant. Given the user's message,
 pick the harness and model best suited for the task.
 
-Available harnesses and their models (each list ordered fastest/cheapest
-to most capable/expensive):
+Available harnesses and their models:
 {harness_menu}
 
 Harness descriptions:
@@ -199,19 +196,18 @@ Harness descriptions:
 - pi: Multi-model headless harness; can run both Claude and GPT models;
   best for read-only exploration, review, and cross-vendor verification.
 
-Model naming conventions:
-- Claude family: haiku is the fastest and most lightweight; sonnet is
-  a balanced mid-range; opus is the most powerful and thorough.
-- GPT family: nano is the most lightweight, then mini, then the base
-  model; higher version numbers (e.g. gpt-5-5 vs gpt-5-4) indicate
-  newer, more capable releases.
+Model naming conventions — use these to judge cost and capability:
+- Claude family (cheapest → most capable): haiku < sonnet < opus.
+- GPT family: a -nano or -mini suffix always means cheaper and faster
+  than the base model of the same or higher version number. Tier order:
+  *-nano < *-mini < base (no suffix), regardless of version number.
+  For example: gpt-5.4-mini is cheaper than gpt-5.4, and gpt-5.5 is
+  the most capable base model but gpt-5.4-mini beats it on cost/speed.
 
 Trade-off guidance:
-- Simple tasks (greetings, quick lookups, one-line fixes) → cheapest model.
-- Moderately complex tasks (single-file edits, debugging, explanation)
-  → mid-range model.
-- Deeply complex tasks (multi-file refactors, architecture decisions,
-  security analysis, long reasoning chains) → most capable model.
+- Simple tasks (greetings, quick lookups, one-line fixes) → cheapest model (nano or mini if available, else haiku).
+- Moderately complex tasks (single-file edits, debugging, explanation) → mid-range model.
+- Deeply complex tasks (multi-file refactors, architecture decisions, security analysis, long reasoning chains) → most capable model.
 
 Return **strict JSON only**:
 {{"harness": "<harness-id>", "model": "<model-id>", "rationale": "<one sentence>"}}
@@ -252,6 +248,7 @@ class LLMRoutingClient:
     ) -> RoutingResult | None:
         flat = _flatten_models(available_models)
         rubric = _build_rubric(available_models)
+        _logger.info("LLMRoutingClient: available_models=%s", dict(available_models))
         try:
             response = await self._llm.create(
                 instructions=rubric,
