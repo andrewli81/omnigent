@@ -345,8 +345,11 @@ jobs:
           TAG: ${{ steps.guard.outputs.tag }}
         run: |
           set -euo pipefail
+          # Read TAG via jq's `env`, not by interpolating it into the jq program —
+          # a tag containing `"` or jq syntax would otherwise alter the filter.
+          # (gh api's built-in --jq has no --arg; env keeps the value as data.)
           match="$(gh api "repos/${SOURCE_REPO}/releases" --paginate \
-            --jq "map(select(.tag_name == \"${TAG}\")) | first // empty")"
+            --jq 'map(select(.tag_name == env.TAG)) | first // empty')"
           is_draft=false; release_id=""
           if [ -n "$match" ]; then
             is_draft="$(printf '%s' "$match" | jq -r '.draft')"
