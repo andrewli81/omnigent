@@ -1,0 +1,17 @@
+# Maintainers currently unavailable for auto-assignment.
+#
+# Add your GitHub username on its own line to stop receiving auto-assigned
+# issues and PR reviews; remove the line when you're back. Comments start with
+# '#'. Only the first token on each line is read as the username -- any text
+# after it is a free-form human note (reason, expected return date, ...) and is
+# ignored by the tooling.
+#
+# Availability only ever NARROWS the candidate pool: if filtering would leave no
+# one to assign, the selectors fall back to assigning anyway, so a PR or issue is
+# never left unassigned because everyone is out.
+#
+# Consulted by:
+#   - .github/workflows/auto-assign-reviewer.js  (PR reviewer routing)
+#   - .github/workflows/issue-triage.yml         (P0/P1 issue round-robin)
+#
+# username        [free-form note -- e.g. reason / return date]

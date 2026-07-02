@@ -86,6 +86,20 @@ jobs:
               assignees[username] = domains
 
           pathlib.Path("/tmp/assignees.json").write_text(json.dumps(assignees))
+
+          # Maintainers currently out of rotation. Only the first token per line
+          # is the username; the rest is a human note. Missing file -> nobody is
+          # unavailable.
+          unavailable = []
+          path = pathlib.Path(".github/UNAVAILABLE")
+          if path.exists():
+              for line in path.read_text().splitlines():
+                  line = line.strip()
+                  if not line or line.startswith("#"):
+                      continue
+                  unavailable.append(line.split()[0])
+
+          pathlib.Path("/tmp/unavailable.json").write_text(json.dumps(unavailable))
           PYEOF
 
       - name: Fetch issue content and duplicate candidates
@@ -483,6 +497,7 @@ jobs:
           import json, pathlib, os
 
           assignees = json.loads(pathlib.Path("/tmp/assignees.json").read_text())
+          unavailable = set(json.loads(pathlib.Path("/tmp/unavailable.json").read_text()))
           triage = json.loads(pathlib.Path("/tmp/triage_result.json").read_text())
           issue_number = int(os.environ["ISSUE_NUMBER"])
 
@@ -498,6 +513,16 @@ jobs:
 
           if not candidates:
               candidates = list(assignees.keys())
+
+          # Drop maintainers who are out of rotation. Availability only narrows
+          # the pool: if the whole domain is out, widen to any available engineer;
+          # if everyone is out, assign anyway rather than drop the issue.
+          available = [u for u in candidates if u not in unavailable]
+          if available:
+              candidates = available
+          else:
+              any_available = [u for u in assignees if u not in unavailable]
+              candidates = any_available or list(assignees.keys())
 
           if candidates:
               candidates.sort()  # deterministic order

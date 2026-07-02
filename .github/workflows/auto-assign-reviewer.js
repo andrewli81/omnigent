@@ -17,6 +17,10 @@
 // "Balance in general": picks are the candidates with the fewest CURRENTLY open
 // review requests across the repo (random tie-break) -- stateless fairness.
 //
+// Availability: maintainers listed in .github/UNAVAILABLE are dropped from the
+// candidate pool. This only ever narrows the pool -- if it would empty, the
+// filter falls back to the unfiltered set so the PR still gets its 1 reviewer.
+//
 // Only handles drawn from .github/reviewers are ever removed when reconciling,
 // so a manually-added reviewer outside that set is left untouched.
 //
@@ -74,6 +78,24 @@ module.exports = async ({ github, context, core }) => {
     return;
   }
 
+  // --- Availability overlay: maintainers listed in .github/UNAVAILABLE are out
+  // of rotation. Only the first token per line is the username; the rest is a
+  // human note. Missing/unreadable file -> nobody is unavailable. Availability
+  // only NARROWS the pool; every use below falls back to the unfiltered set so a
+  // PR is never left without its 1 reviewer just because candidates are out.
+  let unavailable = new Set();
+  try {
+    const u = fs.readFileSync(".github/UNAVAILABLE", "utf8");
+    unavailable = new Set(
+      u.split("\n")
+        .map((l) => l.replace(/#.*/, "").trim().split(/\s+/)[0].toLowerCase())
+        .filter(Boolean)
+    );
+  } catch (e) {
+    core.info("No .github/UNAVAILABLE; treating all maintainers as available.");
+  }
+  const available = (list) => list.filter((u) => !unavailable.has(u.toLowerCase()));
+
   // --- Parse .github/reviewers into ordered (prefix -> owners) rules + the pool.
   const text = fs.readFileSync(".github/reviewers", "utf8");
   const rules = []; // { prefix, owners: [logins] }  (path rules only)
@@ -113,6 +135,14 @@ module.exports = async ({ github, context, core }) => {
   if (candidates.length === 0) {
     core.info("No eligible candidates; nothing to do.");
     return;
+  }
+  // Drop unavailable owners, but keep the pool non-empty: assigning an out
+  // reviewer beats leaving the PR with none.
+  const availableCandidates = available(candidates);
+  if (availableCandidates.length) {
+    candidates = availableCandidates;
+  } else {
+    core.warning("All area candidates are unavailable; assigning one anyway.");
   }
 
   // --- Linked ("closes #N") issues for this PR, via GraphQL (the REST PR
@@ -156,9 +186,14 @@ module.exports = async ({ github, context, core }) => {
   // also known area reviewers (collaborators), so adoption can't route a fork PR
   // to an arbitrary or non-collaborator maintainer. A maintainer assigned to the
   // issue but in no area pool falls through to the normal area pick.
-  const issueReviewers = [
-    ...new Set(linkedIssues.flatMap((li) => li.assignees)),
-  ].filter((u) => managed.has(u.toLowerCase()) && u.toLowerCase() !== author);
+  // An unavailable issue owner is not adopted -- fall through to the area pick
+  // rather than newly request a review from someone who's out. (Their existing
+  // issue assignment is left untouched.)
+  const issueReviewers = available(
+    [...new Set(linkedIssues.flatMap((li) => li.assignees))].filter(
+      (u) => managed.has(u.toLowerCase()) && u.toLowerCase() !== author
+    )
+  );
 
   // --- Global open-review load (stateless fairness signal).
   const openPRs = await github.paginate(github.rest.pulls.list, {
@@ -203,7 +238,9 @@ module.exports = async ({ github, context, core }) => {
     desired = takeLowest(candidates, TARGET);
     if (desired.length < TARGET) {
       const have = new Set(desired.map((u) => u.toLowerCase()).concat(author));
-      const filler = [...poolSet.values()].filter((u) => !have.has(u.toLowerCase()));
+      let filler = [...poolSet.values()].filter((u) => !have.has(u.toLowerCase()));
+      const availableFiller = available(filler);
+      if (availableFiller.length) filler = availableFiller;
       desired = desired.concat(takeLowest(filler, TARGET - desired.length));
     }
   }

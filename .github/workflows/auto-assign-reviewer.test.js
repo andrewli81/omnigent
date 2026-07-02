@@ -3,7 +3,13 @@
 // .github/MAINTAINER (cwd must be the repo root). No network. Loads are made
 // distinct so picks are deterministic.
 const path = require("path");
+const fs = require("fs");
 const script = require(path.resolve(".github/workflows/auto-assign-reviewer.js"));
+
+// The script reads .github/UNAVAILABLE from disk; tests inject an `unavailable`
+// list by writing it for the duration of one run and restoring the original.
+const UNAVAILABLE_PATH = path.resolve(".github/UNAVAILABLE");
+const ORIGINAL_UNAVAILABLE = fs.readFileSync(UNAVAILABLE_PATH, "utf8");
 
 function mkOpenPRs(loadMap) {
   // one open PR per (reviewer, count) so the script's tally reproduces loadMap
@@ -19,7 +25,7 @@ function mkOpenPRs(loadMap) {
 // "closes #N" references, served back through the mocked GraphQL endpoint.
 async function run({
   files, load = {}, current = [], currentAssignees = [],
-  author = "someexternaldev", fork = true, linkedIssues = [],
+  author = "someexternaldev", fork = true, linkedIssues = [], unavailable = [],
 }) {
   const listFiles = () => {}; listFiles._tag = "files";
   const list = () => {}; list._tag = "open";
@@ -75,7 +81,14 @@ async function run({
   };
   const warnings = [];
   const core = { info: () => {}, warning: (m) => warnings.push(m) };
-  await script({ github, context, core });
+  if (unavailable.length) {
+    fs.writeFileSync(UNAVAILABLE_PATH, unavailable.join("\n") + "\n");
+  }
+  try {
+    await script({ github, context, core });
+  } finally {
+    fs.writeFileSync(UNAVAILABLE_PATH, ORIGINAL_UNAVAILABLE);
+  }
   return {
     added: added.sort(), removed: removed.sort(),
     assigned: assigned.sort(), unassigned: unassigned.sort(),
@@ -264,4 +277,44 @@ function assert(name, cond, detail) {
     Object.keys(r.issueAssigned).length === 5, JSON.stringify(Object.keys(r.issueAssigned)));
   assert("capped overflow is warned",
     r.warnings.some((w) => /capping push-down/.test(w)), JSON.stringify(r.warnings));
+
+  // 17. an unavailable area owner is skipped even at lowest load: dhruv0811(0)
+  //     would win, but being out drops him -> the next lowest (dbczumar) is
+  //     picked instead. No fallback warning (available owners remain).
+  r = await run({
+    files: ["omnigent/inner/foo.py"],
+    load: { SabhyaC26: 5, TomeHirata: 4, dhruv0811: 0, dbczumar: 1 },
+    unavailable: ["dhruv0811"],
+  });
+  assert("unavailable lowest-load owner is skipped for the next available",
+    JSON.stringify(r.added) === JSON.stringify(["dbczumar"]), JSON.stringify(r));
+  assert("skipping an unavailable owner does not warn",
+    !r.warnings.some((w) => /unavailable/.test(w)), JSON.stringify(r.warnings));
+
+  // 18. ALL area owners unavailable -> fall back to assigning one anyway (the
+  //     lowest-load among them) rather than leaving the PR without a reviewer,
+  //     with a warning.
+  r = await run({
+    files: ["omnigent/inner/foo.py"],
+    load: { SabhyaC26: 5, TomeHirata: 4, dhruv0811: 0, dbczumar: 1 },
+    unavailable: ["SabhyaC26", "TomeHirata", "dhruv0811", "dbczumar"],
+  });
+  assert("all-unavailable area still assigns one reviewer",
+    JSON.stringify(r.added) === JSON.stringify(["dhruv0811"]), JSON.stringify(r));
+  assert("all-unavailable fallback is warned",
+    r.warnings.some((w) => /unavailable/.test(w)), JSON.stringify(r.warnings));
+
+  // 19. an unavailable maintainer already assigned to the linked issue is NOT
+  //     adopted -> falls through to the area pick (their issue assignment is
+  //     left untouched, so no push-down).
+  r = await run({
+    files: ["omnigent/inner/foo.py"],
+    load: { SabhyaC26: 5, TomeHirata: 4, dhruv0811: 0, dbczumar: 1 },
+    linkedIssues: [{ number: 42, assignees: ["TomeHirata"] }],
+    unavailable: ["TomeHirata"],
+  });
+  assert("unavailable linked-issue owner is not adopted; area pick stands",
+    JSON.stringify(r.added) === JSON.stringify(["dhruv0811"]), JSON.stringify(r));
+  assert("unavailable owner's linked issue is left untouched",
+    Object.keys(r.issueAssigned).length === 0, JSON.stringify(r.issueAssigned));
 })();
