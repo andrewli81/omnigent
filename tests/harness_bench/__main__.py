@@ -63,6 +63,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_false",
         help="Force the offline (declared-only) render.",
     )
+    parser.add_argument(
+        "--transport",
+        metavar="NAME",
+        default=None,
+        help="Transport driver override (e.g. 'sdk-inproc', 'full-server'). "
+        "Wins over each profile's declared transport. Defaults to the "
+        "profile's transport.",
+    )
     fmt = parser.add_mutually_exclusive_group()
     fmt.add_argument(
         "--markdown",
@@ -114,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
             profiles,
             databricks_profile=args.profile,
             live=live,
+            transport=args.transport,
             progress=_progress if live else None,
         )
     )
