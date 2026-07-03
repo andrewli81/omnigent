@@ -8584,7 +8584,7 @@ async def _forward_event_to_runner(
     artifact_store: ArtifactStore | None = None,
     has_mcp_servers: bool = False,
     created_by: str | None = None,
-) -> str:
+) -> tuple[str, bool]:
     """
     Persist a user event and forward it to the runner.
 
@@ -8612,7 +8612,11 @@ async def _forward_event_to_runner(
         this turn. ``False`` by default (agents without MCP servers).
     :param created_by: Authenticated identity of the posting actor,
         recorded on the persisted item for attribution.
-    :returns: The store-assigned id of the persisted item.
+    :returns: ``(item_id, buffered)`` — the store-assigned id of the
+        persisted item, and whether the runner queued it behind an
+        already-active turn (``status == "buffered"``, vs. starting a
+        fresh one). ``buffered`` is ``False`` when the forward failed
+        or the runner's response couldn't be parsed.
     """
     import uuid
 
@@ -8772,13 +8776,23 @@ async def _forward_event_to_runner(
 
     # The runner's sessions-native POST returns 202 immediately
     # and starts the turn as a background task. No streaming
-    # response to drain — events flow through GET /stream.
+    # response to drain — events flow through GET /stream. Its body
+    # reports ``status``: ``"buffered"`` (queued behind an active turn)
+    # vs. ``"accepted"`` (started a fresh turn) — surfaced to the sender
+    # so the client shows a buffered message in the docked queue strip.
+    buffered = False
     try:
-        await runner_client.post(
+        _runner_resp = await runner_client.post(
             f"/v1/sessions/{session_id}/events",
             json=runner_body,
             timeout=10.0,
         )
+        try:
+            buffered = _runner_resp.json().get("status") == "buffered"
+        except (ValueError, AttributeError):
+            # Non-JSON / unexpected body — treat as not buffered; the
+            # consume event still reconciles the message either way.
+            buffered = False
         # Publish input.consumed AFTER the forward succeeds —
         # the runner has the message and will start the turn.
         _publish_input_consumed(session_id, persisted_items[0])
@@ -8800,7 +8814,7 @@ async def _forward_event_to_runner(
         )
         _publish_status(session_id, "idle")
 
-    return persisted_items[0].id
+    return persisted_items[0].id, buffered
 
 
 @dataclass
@@ -8816,10 +8830,15 @@ class _SessionEventDispatchResult:
         ``"pending_a1b2c3"`` — surfaced to the sender so it can adopt
         the id and dedupe against the snapshot. ``None`` for non-native
         events (already persisted, so no separate pending entry).
+    :param buffered: ``True`` when the runner queued this message behind
+        an already-active turn (rather than starting a fresh one), so
+        the client shows it in the docked queue strip until its
+        ``session.input.consumed`` promotes it.
     """
 
     item_id: str | None
     pending_id: str | None
+    buffered: bool = False
 
 
 async def _dispatch_session_event_to_runner(
@@ -9029,7 +9048,7 @@ async def _dispatch_session_event_to_runner(
                 _native_verdict,
             )
         return _SessionEventDispatchResult(item_id=None, pending_id=pending_id)
-    item_id = await _forward_event_to_runner(
+    item_id, buffered = await _forward_event_to_runner(
         session_id,
         conv,
         body,
@@ -9041,7 +9060,7 @@ async def _dispatch_session_event_to_runner(
         has_mcp_servers=has_mcp_servers,
         created_by=created_by,
     )
-    return _SessionEventDispatchResult(item_id=item_id, pending_id=None)
+    return _SessionEventDispatchResult(item_id=item_id, pending_id=None, buffered=buffered)
 
 
 def _extract_persistent_item_from_sse(
@@ -19376,6 +19395,11 @@ def create_sessions_router(
         # stability) and relies on stableKey + FIFO instead.
         if dispatch.pending_id is not None:
             response["pending_id"] = dispatch.pending_id
+        # The runner queued this message behind an already-active turn —
+        # tell the client so it shows it in the docked queue strip until
+        # the agent picks it up, rather than inline in the transcript.
+        if dispatch.buffered:
+            response["buffered"] = True
         return response
 
     # ── GET /sessions/{session_id}/stream ────────────────────────

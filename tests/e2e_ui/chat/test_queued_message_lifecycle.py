@@ -34,6 +34,16 @@ User-message bubbles are ``data-testid="message-bubble"`` +
 ``data-role="user"`` (see ``ChatPage.tsx``). The user's own message
 text is deterministic regardless of the LLM's reply, so assertions key
 off unique sentinel strings — no dependence on model output.
+
+The last tests cover the **docked queue** (``data-testid="queued-message"``):
+a follow-up sent while a turn is in flight is POSTed to the server IMMEDIATELY,
+and the server queues it into the running task's inbox. The client flags it
+``queued`` and shows it as a read-only row above the composer
+(``data-queued-state="queued"``) — NOT a transcript bubble — until its
+``session.input.consumed`` promotes it inline. The strip has no actions: the
+message is already on the server. So the queued strip is exactly "posted, not
+yet picked up," observable in the natural in-flight window without gating the
+LLM.
 """
 
 from __future__ import annotations
@@ -47,8 +57,11 @@ from playwright.sync_api import Page, expect
 # has no reason to echo them verbatim into its own bubble.
 _NAV_MSG = "sentinel-nav-7f3a remember this exact phrase"
 _PROMOTE_MSG = "sentinel-promote-91b2 keep this bubble"
-_QUEUE_MSG_A = "sentinel-queue-a-4d1e first of two"
-_QUEUE_MSG_B = "sentinel-queue-b-8c6f second of two"
+# Docked-queue test: A holds the turn open so B, sent while A streams, is
+# observably queued (docked above the composer) until A finishes and the agent
+# picks B up.
+_DOCK_MSG_A = "sentinel-dock-a-2f7d hold the turn open"
+_DOCK_MSG_B = "sentinel-dock-b-3e9a queued behind the first"
 
 _COMPOSER_PLACEHOLDER = "Ask the agent anything…"
 
@@ -56,6 +69,17 @@ _COMPOSER_PLACEHOLDER = "Ask the agent anything…"
 def _user_bubble(page: Page, text: str):
     """Locator for the user-message bubble carrying ``text``."""
     return page.locator('[data-testid="message-bubble"][data-role="user"]').filter(has_text=text)
+
+
+def _queued_row(page: Page, text: str):
+    """Locator for the docked queue row carrying ``text``.
+
+    A queued (posted-but-unconsumed) follow-up renders in the strip above the
+    composer (``data-testid="queued-message"``), NOT inline in the transcript;
+    once the agent picks it up it leaves the strip and becomes an ordinary
+    bubble.
+    """
+    return page.locator('[data-testid="queued-message"]').filter(has_text=text)
 
 
 def _send(page: Page, text: str) -> None:
@@ -149,37 +173,49 @@ def test_user_message_survives_navigation_away_and_back(
     expect(_user_bubble(page, _NAV_MSG)).to_be_visible()
 
 
-def test_second_message_queued_while_first_streams_both_render(
+def test_message_sent_while_busy_queues_then_promotes_on_pickup(
     page: Page,
     seeded_session: tuple[str, str],
 ) -> None:
-    """Queue a second message while the first turn is active: both render.
+    """A follow-up sent mid-turn queues above the composer, then promotes inline.
 
-    Sends A, then types B and clicks Send while A's turn is still in
-    flight (the composer keeps a working Send button whenever it holds a
-    draft — ``showInterruptButton = isWorking && !hasDraft``). Both user
-    bubbles must render and, once everything settles, persist as exactly
-    one bubble each.
+    The queued lifecycle end-to-end:
 
-    This exercises queueing two optimistic bubbles and promoting both as
-    their ``session.input.consumed`` events arrive in order — a count
-    other than 1 for either means the FIFO promotion dropped or
-    duplicated a queued bubble.
+    1. Send A → its turn goes to work. Send B while A is in flight: B is POSTed
+       immediately, but the server queues it into the running task's inbox, so
+       the client flags it ``queued`` and shows it as a read-only docked row
+       (``data-queued-state="queued"``) — NOT a transcript bubble.
+    2. The row is read-only — no client-side edit/delete/steer actions, since
+       the message is already on the server.
+    3. Let A's turn finish → the agent picks B up (``session.input.consumed``);
+       B leaves the strip and renders inline as exactly one transcript bubble,
+       without any user action, and A is unaffected.
+
+    Steps 1–2 ride the natural in-flight window (client send-time state), so no
+    LLM gating is needed; step 3 waits the turn out.
     """
     base_url, session_id = seeded_session
     page.goto(f"{base_url}/c/{session_id}")
 
-    _send(page, _QUEUE_MSG_A)
-    # A's optimistic bubble is up; the turn is now (or about to be)
-    # working. Queue B immediately by typing a draft and sending again.
-    expect(_user_bubble(page, _QUEUE_MSG_A)).to_be_visible(timeout=10_000)
-    _send(page, _QUEUE_MSG_B)
-    expect(_user_bubble(page, _QUEUE_MSG_B)).to_be_visible(timeout=10_000)
+    # Send A; as soon as its bubble is up the turn is (about to be) working.
+    _send(page, _DOCK_MSG_A)
+    expect(_user_bubble(page, _DOCK_MSG_A)).to_be_visible(timeout=10_000)
 
-    # Let both turns drain. Two distinct user messages were sent, so once
-    # the session goes idle there must be exactly one bubble for each —
-    # both consumed and promoted, neither dropped nor double-rendered.
+    # Send B while A is in flight → queued docked row, not a transcript bubble.
+    _send(page, _DOCK_MSG_B)
+    row = _queued_row(page, _DOCK_MSG_B)
+    expect(row).to_be_visible(timeout=10_000)
+    expect(row).to_have_attribute("data-queued-state", "queued")
+    expect(_user_bubble(page, _DOCK_MSG_B)).to_have_count(0)
+    # Read-only: no client-side actions on a posted message.
+    expect(row.get_by_test_id("queued-edit")).to_have_count(0)
+    expect(row.get_by_test_id("queued-delete")).to_have_count(0)
+    expect(row.get_by_test_id("queued-steer")).to_have_count(0)
+
+    # Drain the turn → the agent picks B up. It leaves the strip and renders
+    # inline as exactly one transcript bubble; A is unaffected.
     assistant = page.locator('[data-testid="message-bubble"][data-role="assistant"]').first
     expect(assistant).to_have_text(re.compile(r"\S"), timeout=60_000)
-    expect(_user_bubble(page, _QUEUE_MSG_A)).to_have_count(1, timeout=60_000)
-    expect(_user_bubble(page, _QUEUE_MSG_B)).to_have_count(1, timeout=60_000)
+    expect(_queued_row(page, _DOCK_MSG_B)).to_have_count(0, timeout=60_000)
+    expect(_user_bubble(page, _DOCK_MSG_B)).to_have_count(1, timeout=60_000)
+    expect(_user_bubble(page, _DOCK_MSG_A)).to_have_count(1, timeout=60_000)

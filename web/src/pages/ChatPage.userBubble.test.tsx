@@ -2,7 +2,20 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Bubble } from "@/lib/renderItems";
 import { FileViewerContext } from "@/shell/FileViewerContext";
-import { BubbleView } from "./ChatPage";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useChatStore } from "@/store/chatStore";
+import { BubbleView, QueuedMessages } from "./ChatPage";
+
+// The steer/delete buttons use the app's Tooltip, which needs a
+// TooltipProvider ancestor (the app root supplies one globally). Mirror
+// that here so bare QueuedMessages renders don't throw.
+function renderQueue() {
+  return render(
+    <TooltipProvider>
+      <QueuedMessages />
+    </TooltipProvider>,
+  );
+}
 
 // UserBubble renders its text through the same markdown renderer as the
 // assistant bubble (FilePathAwareMessageResponse → Streamdown). These tests
@@ -98,6 +111,68 @@ describe("UserBubble markdown rendering", () => {
     // table would render as literal pipe text with no <table>/<td>.
     const cell = await screen.findByText("1", { selector: "td, td *" });
     expect(cell.closest("table")).not.toBeNull();
+  });
+});
+
+function queuedMsg(tempId: string, text: string) {
+  return {
+    tempId,
+    content: [{ type: "input_text" as const, text }],
+    queued: true as const,
+  };
+}
+
+describe("QueuedMessages docked list (posted, awaiting pickup)", () => {
+  afterEach(() => {
+    useChatStore.setState({ pendingUserMessages: [] });
+  });
+
+  it("renders a queued pending message as a read-only row (no actions)", () => {
+    useChatStore.setState({
+      pendingUserMessages: [queuedMsg("p1", "queued follow-up")],
+    });
+    renderQueue();
+    const row = screen.getByTestId("queued-message");
+    expect(row).toHaveAttribute("data-queued-state", "queued");
+    expect(row).toHaveTextContent("queued follow-up");
+    // No client-side actions — the message is already on the server.
+    expect(screen.queryByTestId("queued-edit")).toBeNull();
+    expect(screen.queryByTestId("queued-delete")).toBeNull();
+    expect(screen.queryByTestId("queued-steer")).toBeNull();
+  });
+
+  it("stacks multiple queued rows in FIFO order", () => {
+    useChatStore.setState({
+      pendingUserMessages: [queuedMsg("p1", "first"), queuedMsg("p2", "second")],
+    });
+    renderQueue();
+    const rows = screen.getAllByTestId("queued-message");
+    expect(rows[0]).toHaveTextContent("first");
+    expect(rows[1]).toHaveTextContent("second");
+  });
+
+  it("keeps NON-queued pending sends OUT of the strip — they render inline instead", () => {
+    // A send that started a fresh turn carries no `queued` flag; it renders as
+    // a transcript bubble, so the docked strip must ignore it.
+    useChatStore.setState({
+      pendingUserMessages: [
+        { tempId: "p1", content: [{ type: "input_text", text: "on its way" }] },
+      ],
+    });
+    const { container } = renderQueue();
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId("queued-messages")).toBeNull();
+  });
+});
+
+describe("UserBubble (no queued caption)", () => {
+  it("renders a bubble with no pending-pickup caption", () => {
+    // Queued messages live in the docked strip, not as transcript bubbles, so
+    // there's no separate 'Queued — waiting' caption on a bubble.
+    renderBubble(userBubble("delivered"));
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).not.toHaveAttribute("data-queued");
+    expect(screen.queryByTestId("queued-bubble-indicator")).toBeNull();
   });
 });
 

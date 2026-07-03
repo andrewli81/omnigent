@@ -335,6 +335,22 @@ describe("buildPendingBubbles", () => {
     // p.author ("bob") wins over the viewer's selfAuthor ("alice").
     expect(bubble.createdBy).toBe("bob@example.com");
   });
+
+  it("renders every pending send as an ordinary inline bubble (no queued flag)", () => {
+    // Pending sends — whether they start a turn or land while one is running —
+    // render inline in the transcript like any optimistic bubble. There is no
+    // separate "queued" treatment; un-sent messages live in heldMessages and
+    // render in the docked strip until they auto-flush.
+    const mixed = [
+      { tempId: "tmp_now", content: [{ type: "input_text" as const, text: "starts a turn" }] },
+      { tempId: "tmp_q", content: [{ type: "input_text" as const, text: "sent behind" }] },
+    ];
+    const bubbles = buildPendingBubbles(mixed, null) as Extract<Bubble, { kind: "user" }>[];
+    expect(bubbles).toHaveLength(2);
+    expect(bubbles[0]!.itemId).toBe("tmp_now");
+    expect(bubbles[1]!.itemId).toBe("tmp_q");
+    expect(bubbles.every((b) => !("queued" in b))).toBe(true);
+  });
 });
 
 // ── mergePendingBubbles ────────────────────────────────────────────────────

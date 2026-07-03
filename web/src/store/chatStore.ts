@@ -141,6 +141,14 @@ export interface PendingUserMessage {
    * on snapshot-replayed entries (they're already server-owned).
    */
   posted?: boolean;
+  /**
+   * True when the server queued this message behind a busy turn. Decides
+   * WHERE an unconsumed message shows — the docked "Queued" strip vs. inline
+   * in the transcript — not whether it's consumed (that's
+   * `session.input.consumed`, which clears it either way). Unset on
+   * snapshot-replayed entries and slash echoes.
+   */
+  queued?: boolean;
 }
 
 /**
@@ -788,6 +796,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({ status: "streaming", activeResponse: null });
     }
 
+    // Optimistic guess at "is the agent busy" so the docked "Queued" strip
+    // shows the message instantly, before the POST returns. The runner's
+    // `buffered` status reconciles `queued` below — this only covers the
+    // render gap. `serverBusy` catches the case `alreadyStreaming` misses:
+    // local `status` is `idle` but the agent loop is still draining
+    // (`running`/`waiting`). Native sends get no `buffered` signal, so their
+    // optimistic value stands.
+    const serverBusy = (() => {
+      const ss = get().sessionStatus;
+      return ss === "running" || ss === "waiting";
+    })();
+    const isQueuedSend = alreadyStreaming || serverBusy || get().isNativeTerminalSession;
+
     // Push to `pendingUserMessages` BEFORE the POST so the bubble
     // renders immediately AND so `session.input.consumed` finds an
     // entry to promote even if the SSE event races ahead of the POST
@@ -810,7 +831,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       pendingUserMessages: [
         ...s.pendingUserMessages,
-        { tempId, content, ...(selfAuthor !== null ? { author: selfAuthor } : {}) },
+        {
+          tempId,
+          content,
+          ...(selfAuthor !== null ? { author: selfAuthor } : {}),
+          ...(isQueuedSend ? { queued: true } : {}),
+        },
       ],
       // A new turn supersedes the prior turn's background-shell tally: the
       // "N background tasks still running" label must give way to "Working…" the
@@ -925,9 +951,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // have since resolved — the stuck-pending-bubble bug. The live
         // bubble itself keeps rendering until its consumed event pops
         // it; only the navigation-survival policy changes here.
+        //
+        // Reconcile `queued` to the server's `buffered` — the authoritative
+        // "was this queued behind an active turn" — correcting the optimistic
+        // guess above. Native sends have no `buffered` signal, so keep theirs.
+        const isNative = get().isNativeTerminalSession;
         set((s) => ({
           pendingUserMessages: s.pendingUserMessages.map((p) =>
-            p.tempId === tempId ? { ...p, posted: true } : p,
+            p.tempId === tempId
+              ? {
+                  ...p,
+                  posted: true,
+                  ...(isNative ? {} : { queued: postResult.buffered === true }),
+                }
+              : p,
           ),
           pendingByConversation: removeFromPendingStash(s.pendingByConversation, sessionId, tempId),
         }));
@@ -3760,6 +3797,9 @@ export function handleSessionEvent(event: StreamEvent): void {
       //      the drop and strand the bubble as a duplicate.
       //   3. No pending entry — render the event payload as a fresh
       //      committed bubble (TUI-typed message, or another client).
+      // The "Queued" badge rides on the optimistic pending entry; promoting
+      // it into `blocks` here drops the entry, so the badge disappears the
+      // moment the agent picks the message up — no extra state needed.
       useChatStore.setState((s) => {
         if (hasCommittedItem(s.blocks, event.itemId)) return {};
 

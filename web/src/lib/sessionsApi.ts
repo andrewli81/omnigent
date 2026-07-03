@@ -51,6 +51,12 @@ export interface PostEventResponse {
    *  denial text via SSE but did not start a turn or persist the
    *  user message, so no `session.input.consumed` will follow. */
   denied?: boolean;
+  /** True when the runner queued this message behind an already-active
+   *  turn (rather than starting a fresh one). The client shows a
+   *  buffered message in the docked queue strip until its
+   *  `session.input.consumed` promotes it into the transcript. Absent
+   *  (falsy) when the message started a fresh turn. */
+  buffered?: boolean;
   /**
    * Server-assigned pending-input id for a native-terminal web
    * message, e.g. ``"pending_a1b2c3"``. It identifies the snapshot's
@@ -359,12 +365,14 @@ function postEventResponseFromWire(wire: {
   item_id?: string;
   denied?: boolean;
   pending_id?: string;
+  buffered?: boolean;
 }): PostEventResponse {
   return {
     queued: wire.queued,
     itemId: wire.item_id,
     denied: wire.denied,
     pendingId: wire.pending_id,
+    buffered: wire.buffered,
   };
 }
 

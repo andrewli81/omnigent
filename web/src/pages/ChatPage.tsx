@@ -18,6 +18,7 @@ import {
   CheckIcon,
   AlertTriangleIcon,
   ChevronDownIcon,
+  ClockIcon,
   CornerUpLeftIcon,
   CopyIcon,
   FileTextIcon,
@@ -297,7 +298,14 @@ export function containsMarkdownTable(items: RenderItem[]): boolean {
 }
 
 /**
- * Build optimistic user bubbles from the pending-send queue.
+ * Build optimistic user bubbles from the pending-send queue, for the
+ * transcript.
+ *
+ * Excludes `queued` sends: a message POSTed while the agent was busy sits in
+ * the docked strip above the composer (see {@link QueuedMessages}), NOT inline
+ * in the transcript, until its `session.input.consumed` clears the pending
+ * entry and promotes it into committed history. A non-queued send (starts a
+ * fresh turn) renders inline immediately.
  *
  * Author priority per bubble: `p.author` (captured at send time for
  * fresh sends, or from the snapshot's `created_by` for replayed entries)
@@ -313,23 +321,106 @@ export function containsMarkdownTable(items: RenderItem[]): boolean {
  * `selfAuthor` is null before identity resolves and in single-user
  * mode (no label shown).
  *
- * @param pending - the queued optimistic sends, in FIFO order.
+ * @param pending - the pending optimistic sends, in FIFO order.
  * @param selfAuthor - the viewer's attribution id, or null.
  */
 export function buildPendingBubbles(
   pending: PendingUserMessage[],
   selfAuthor: string | null,
 ): Bubble[] {
-  return pending.map((p) => {
-    const author = p.author ?? selfAuthor;
-    return {
-      kind: "user",
-      // No server item id yet; tempId keeps React keys stable until promotion.
-      itemId: p.tempId,
-      content: p.content,
-      ...(author !== null ? { createdBy: author } : {}),
-    };
-  });
+  return pending
+    .filter((p) => p.queued !== true)
+    .map((p) => {
+      const author = p.author ?? selfAuthor;
+      return {
+        kind: "user" as const,
+        // No server item id yet; tempId keeps React keys stable until promotion.
+        itemId: p.tempId,
+        content: p.content,
+        ...(author !== null ? { createdBy: author } : {}),
+      };
+    });
+}
+
+/**
+ * One-line preview text for a queued message row.
+ *
+ * The queued list is a compact strip, so it shows the typed text. An
+ * image-/file-only queued message has no text — fall back to the first
+ * attachment's filename so the row is never blank.
+ */
+function queuedMessagePreview(content: MessageContentBlock[]): string {
+  const text = extractUserText(content);
+  if (text) return text;
+  for (const c of content) {
+    if ((c.type === "input_image" || c.type === "input_file") && c.filename) {
+      return c.filename;
+    }
+  }
+  return "Attachment";
+}
+
+/**
+ * The docked message queue — a compact stack directly above the composer,
+ * mirroring the Codex chat UX: follow-ups waiting to be picked up sit right
+ * above the input.
+ *
+ * Shows the `queued` pending messages — follow-ups POSTed while the agent was
+ * busy, which the server queues into the running task's inbox. They're
+ * read-only here (the server has them; there's no client-side cancel/edit) and
+ * carry a "Queued" indicator (clock + label). Each leaves the strip and appears
+ * inline in the transcript once its `session.input.consumed` clears the pending
+ * entry. Column-aligned with the composer box.
+ */
+export function QueuedMessages() {
+  // Select the raw array (stable reference) and filter in render — a selector
+  // that returns `.filter(...)` builds a new array each call, which Zustand
+  // reads as a change and re-renders in a loop.
+  const pending = useChatStore((s) => s.pendingUserMessages);
+  const queued = pending.filter((p) => p.queued === true);
+  if (queued.length === 0) return null;
+
+  return (
+    <div className="px-4 md:px-6">
+      <div
+        data-testid="queued-messages"
+        // Cap the strip so a long queue can't push the composer off-screen or
+        // bury the transcript — it scrolls past ~5 rows (max-h-48) instead of
+        // growing without bound. `overflow-y-auto` keeps the rounded border
+        // clipping its children. Thin, muted thumb matches the app's themed
+        // scrollbar convention (see ForkSessionDialog) rather than the heavy
+        // default OS bar.
+        className={cn(
+          "mx-auto mb-1.5 flex max-h-48 w-full flex-col divide-y divide-border overflow-y-auto rounded-xl border border-border bg-muted/40 [scrollbar-color:var(--color-muted-foreground)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/40 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar]:w-2",
+          CHAT_COLUMN_WIDTH,
+        )}
+      >
+        {queued.map((msg) => (
+          <QueuedMessageRow key={msg.tempId} message={msg} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One row of the docked queue: a read-only preview of a message POSTed to a
+ * busy agent and awaiting pickup. No actions — the message is already on the
+ * server (there's no client-side cancel/edit); it clears on its own when the
+ * agent consumes it.
+ */
+function QueuedMessageRow({ message }: { message: PendingUserMessage }) {
+  return (
+    <div
+      data-testid="queued-message"
+      data-queued-state="queued"
+      className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground"
+    >
+      <ClockIcon className="size-3.5 shrink-0 animate-pulse" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">{queuedMessagePreview(message.content)}</span>
+      <span className="shrink-0 text-xs">Queued</span>
+    </div>
+  );
 }
 
 // A committed bubble that exists ONLY to render one or more
@@ -970,6 +1061,10 @@ export function ChatPage() {
       setReconnectDialogOpen(true);
       return;
     }
+    // Always POST immediately. If the agent is busy the server queues the
+    // message into the running task's inbox and `send` flags it `queued`, so
+    // it shows in the docked "Queued" strip until its `session.input.consumed`
+    // promotes it into the transcript.
     void useChatStore.getState().send(text, agentId, files, {
       onConversationCreated: (newId) => {
         // Eager URL update: the moment the server tells us this
@@ -1700,6 +1795,9 @@ function MainAgentSurface({
         containerRef={conversationRef}
         onReply={(text) => setReplyQuotes((prev) => [...prev, text])}
       />
+
+      {/* Follow-ups queued behind a busy agent, stacked above the composer. */}
+      <QueuedMessages />
 
       <Composer
         disabled={disabled}

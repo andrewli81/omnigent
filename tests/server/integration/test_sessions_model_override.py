@@ -293,18 +293,25 @@ async def test_create_session_rejects_invalid_reasoning_effort(
 class _CaptureClient:
     """Stub runner client that records the POSTed body for inspection."""
 
-    def __init__(self, captured: dict[str, Any]) -> None:
+    def __init__(self, captured: dict[str, Any], runner_status: str = "accepted") -> None:
         self._captured = captured
+        self._runner_status = runner_status
 
     async def post(self, path: str, *, json: dict[str, Any], **_: Any) -> Any:
         """Record the path + body and return a fake 202 response."""
         self._captured["path"] = path
         self._captured["body"] = json
 
+        runner_status = self._runner_status
+
         class _Resp:
             status_code = 202
             headers: dict[str, str] = {}
             text = ""
+
+            @staticmethod
+            def json() -> dict[str, str]:
+                return {"status": runner_status}
 
         return _Resp()
 
@@ -312,9 +319,14 @@ class _CaptureClient:
         raise NotImplementedError
 
 
-def _stub_runner_client(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+def _stub_runner_client(
+    monkeypatch: pytest.MonkeyPatch, runner_status: str = "accepted"
+) -> dict[str, Any]:
     """Patch ``_get_runner_client`` to return a capturing stub.
 
+    :param runner_status: The ``status`` the fake runner reports in its
+        POST /events response body — ``"buffered"`` (queued behind an
+        active turn) or ``"accepted"`` (started a fresh turn).
     :returns: A dict the test inspects after the runner POST runs;
         contains ``path`` and ``body`` keys once the route fires.
     """
@@ -323,7 +335,7 @@ def _stub_runner_client(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
     async def _stub(*_: Any, **__: Any) -> _CaptureClient:
-        return _CaptureClient(captured)
+        return _CaptureClient(captured, runner_status)
 
     monkeypatch.setattr(sessions_mod, "_get_runner_client", _stub)
     return captured
@@ -373,6 +385,56 @@ async def test_runner_path_forwards_persisted_model_override(
         f"{sorted(captured['body'].keys())!r}. The persisted column did "
         f"not flow into _forward_event_to_runner's runner_body."
     )
+
+
+async def test_message_surfaces_buffered_when_runner_queues_behind_active_turn(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The POST /events response reports ``buffered`` from the runner status.
+
+    When the runner queues a message behind an already-active turn it
+    replies ``{"status": "buffered"}``; the AP route must surface that as
+    ``buffered: true`` so the client shows the message in the docked queue
+    strip (rather than predicting busy-ness client-side).
+    """
+    _stub_runner_client(monkeypatch, runner_status="buffered")
+
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+    sid = session["id"]
+
+    resp = await client.post(
+        f"/v1/sessions/{sid}/events",
+        json={
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        },
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json().get("buffered") is True, resp.text
+
+
+async def test_message_omits_buffered_when_runner_starts_fresh_turn(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh-turn send (runner ``status == "accepted"``) carries no ``buffered``."""
+    _stub_runner_client(monkeypatch, runner_status="accepted")
+
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+    sid = session["id"]
+
+    resp = await client.post(
+        f"/v1/sessions/{sid}/events",
+        json={
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        },
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json().get("buffered") is not True, resp.text
 
 
 async def test_create_time_model_override_forwards_on_first_event(

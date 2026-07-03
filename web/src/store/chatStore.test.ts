@@ -2522,6 +2522,126 @@ describe("chatStore — send (cross-session routing)", () => {
   });
 });
 
+// A message POSTed while the agent is busy is flagged `queued` on its pending
+// entry, so it shows in the docked strip until its `session.input.consumed`
+// promotes it into the transcript. A message sent while idle starts a fresh
+// turn and carries no flag.
+describe("chatStore — send while busy (queued flag)", () => {
+  // Mock the events POST to report the runner's queue status. `buffered` is
+  // the authoritative signal the store reconciles `queued` from.
+  function mockEventsBuffered(buffered: boolean): void {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.match(/\/v1\/sessions\/[^/]+\/events$/)) {
+        return mockResponse({ queued: true, item_id: "ci_mock", buffered });
+      }
+      return defaultFetchHandler(input, init);
+    });
+  }
+
+  it("POSTs immediately and flags a send as queued when the server reports buffered", async () => {
+    mockEventsBuffered(true);
+    useChatStore.setState({
+      conversationId: "conv_existing",
+      abortController: new AbortController(),
+      status: "streaming",
+    });
+
+    await useChatStore.getState().send("queue me", "agent_xyz");
+
+    const pending = useChatStore.getState().pendingUserMessages;
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.queued).toBe(true);
+    // It really went to the server — no client-side holding.
+    const events = fetchMock.mock.calls.filter(([u]) =>
+      String(u).endsWith("/v1/sessions/conv_existing/events"),
+    );
+    expect(events).toHaveLength(1);
+    const body = JSON.parse((events[0]![1] as RequestInit).body as string);
+    expect(body.data.content).toEqual([{ type: "input_text", text: "queue me" }]);
+  });
+
+  it("reconciles queued to false when the server did NOT buffer (started a turn)", async () => {
+    // The optimistic prediction may say queued (local status streaming), but
+    // the server's `buffered=false` is authoritative — the message started a
+    // fresh turn, so it renders inline, not in the strip.
+    mockEventsBuffered(false);
+    useChatStore.setState({
+      conversationId: "conv_existing",
+      abortController: new AbortController(),
+      status: "streaming",
+    });
+
+    await useChatStore.getState().send("start now", "agent_xyz");
+
+    const pending = useChatStore.getState().pendingUserMessages;
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.queued).toBe(false);
+  });
+
+  it("does not flag a send made while fully idle", async () => {
+    mockEventsBuffered(false);
+    useChatStore.setState({
+      conversationId: "conv_existing",
+      abortController: new AbortController(),
+      status: "idle",
+      sessionStatus: "idle",
+    });
+
+    await useChatStore.getState().send("start now", "agent_xyz");
+
+    const pending = useChatStore.getState().pendingUserMessages;
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.queued).toBe(false);
+  });
+
+  it("keeps a native-terminal send flagged queued (no server buffered signal)", async () => {
+    // Native sessions ride the pending_inputs path — the runner returns no
+    // `buffered`, so the optimistic value (native → queued) stands.
+    useChatStore.setState({
+      conversationId: "conv_native",
+      abortController: new AbortController(),
+      status: "idle",
+      sessionStatus: "idle",
+      isNativeTerminalSession: true,
+    });
+
+    await useChatStore.getState().send("hey", "agent_xyz");
+
+    const pending = useChatStore.getState().pendingUserMessages;
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.queued).toBe(true);
+  });
+
+  it("drops the queued flag when the agent picks the message up (consume → promote)", async () => {
+    // The flag rides only on the optimistic pending entry; its
+    // session.input.consumed promotes it into `blocks` as a committed bubble
+    // that carries no `queued`, so it leaves the strip on pickup.
+    mockEventsBuffered(true);
+    useChatStore.setState({
+      conversationId: "conv_existing",
+      abortController: new AbortController(),
+      status: "streaming",
+    });
+
+    await useChatStore.getState().send("queue me", "agent_xyz");
+    expect(useChatStore.getState().pendingUserMessages[0]!.queued).toBe(true);
+
+    handleSessionEvent({
+      type: "session_input_consumed",
+      itemId: "msg_q_1",
+      itemType: "message",
+      data: { role: "user", content: [{ type: "input_text", text: "queue me" }] },
+    });
+
+    const state = useChatStore.getState();
+    expect(state.pendingUserMessages).toEqual([]);
+    const promoted = state.blocks.find((b) => b.type === "user_message") as UserMessageBlock;
+    expect(promoted).toBeDefined();
+    expect("queued" in promoted).toBe(false);
+  });
+});
+
 describe("chatStore — send (file attachments)", () => {
   it("refreshes the pending entry with real file_ids after upload", async () => {
     // Claude-native's session.input.consumed is text-only, so the
