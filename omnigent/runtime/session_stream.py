@@ -26,6 +26,7 @@ Consumer (SSE endpoint, async):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
@@ -123,6 +124,22 @@ def close(conversation_id: str) -> None:
         subs = list(_subscribers.get(conversation_id, ()))
     for queue, loop in subs:
         loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+
+
+def shutdown_all() -> None:
+    """Signal all active subscribers across every conversation to exit.
+
+    Broadcasts the end-of-stream sentinel to every queued subscriber so
+    SSE generators return at their next iteration without waiting for a
+    heartbeat timeout or forced task cancellation. Must be called from
+    the asyncio event loop (e.g. the server lifespan shutdown handler);
+    sync callers should use :func:`close` per-conversation instead.
+    """
+    with _lock:
+        all_subs = [entry for subs in _subscribers.values() for entry in subs]
+    for queue, _ in all_subs:
+        with contextlib.suppress(asyncio.QueueFull):
+            queue.put_nowait(_DONE)
 
 
 async def subscribe(

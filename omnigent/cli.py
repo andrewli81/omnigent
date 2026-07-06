@@ -233,11 +233,14 @@ _DAEMON_RECONNECT_GRACE_S = 5.0
 _DAEMON_REUSE_MIN_AGE_S = 6.0
 
 # How long uvicorn waits for active connections (WebSocket, SSE) after
-# SIGTERM before force-closing them.  30 s gives in-flight responses time
-# to drain while still guaranteeing the port is released promptly.
+# SIGTERM before force-closing them.  SSE streams signal themselves via
+# session_stream.shutdown_all() in the lifespan handler, so the main
+# remaining consumers of this window are WebSocket tunnels that need a
+# moment to drain.  5 s is enough for a clean tunnel teardown while
+# keeping Ctrl-C feeling instant.
 # Overridable via OMNIGENT_SERVER_SHUTDOWN_TIMEOUT_S for deployments that
 # need a longer drain window (e.g. large file uploads).
-_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_S_DEFAULT = 30
+_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_S_DEFAULT = 5
 _SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_S = int(
     os.environ.get(
         "OMNIGENT_SERVER_SHUTDOWN_TIMEOUT_S",
