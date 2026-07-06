@@ -34,7 +34,7 @@ guardrails:
       type: function
       on: [tool_call]
       function:
-        path: omnigent.policies.builtins.orchestration.blast_radius
+        path: omnigent.inner.nessie.policies.blast_radius
         arguments:
           gate_pushes: false
 
