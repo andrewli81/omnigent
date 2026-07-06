@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from click.testing import CliRunner
 
 from omnigent.cli import cli
@@ -50,13 +49,22 @@ def test_session_export_writes_jsonl(db_uri: str, tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["session", "export", "--id", conv.id, "--output", str(out_file), "--database-uri", db_uri],
+        [
+            "session",
+            "export",
+            "--id",
+            conv.id,
+            "--output",
+            str(out_file),
+            "--database-uri",
+            db_uri,
+        ],
     )
 
     assert result.exit_code == 0, result.output
     assert out_file.exists()
 
-    lines = [json.loads(l) for l in out_file.read_text().splitlines() if l]
+    lines = [json.loads(line) for line in out_file.read_text().splitlines() if line]
     assert len(lines) == 3  # 1 meta + 2 items
 
     meta = lines[0]
@@ -85,7 +93,7 @@ def test_session_export_default_filename(db_uri: str, tmp_path: Path) -> None:
         assert result.exit_code == 0, result.output
         default_path = Path(f"{conv.id}.jsonl")
         assert default_path.exists()
-        lines = [json.loads(l) for l in default_path.read_text().splitlines() if l]
+        lines = [json.loads(line) for line in default_path.read_text().splitlines() if line]
     # session_meta line only (no items added)
     assert len(lines) == 1
     assert lines[0]["record_type"] == "session_meta"
@@ -122,11 +130,20 @@ def test_session_export_items_ordered_ascending(db_uri: str, tmp_path: Path) -> 
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["session", "export", "--id", conv.id, "--output", str(out_file), "--database-uri", db_uri],
+        [
+            "session",
+            "export",
+            "--id",
+            conv.id,
+            "--output",
+            str(out_file),
+            "--database-uri",
+            db_uri,
+        ],
     )
     assert result.exit_code == 0, result.output
 
-    records = [json.loads(l) for l in out_file.read_text().splitlines() if l]
+    records = [json.loads(line) for line in out_file.read_text().splitlines() if line]
     item_records = [r for r in records if r["record_type"] == "item"]
     ids = [r["id"] for r in item_records]
     # items should be distinct and match what the store holds
