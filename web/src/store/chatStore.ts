@@ -73,6 +73,7 @@ import { createPresenceIdleTracker } from "@/lib/presenceIdle";
 import { parseEvent, parseSseStream, type SseStreamResult } from "@/lib/sse";
 import { childSessionsQueryKey, type ChildSessionInfo } from "@/hooks/useChildSessions";
 import type { Conversation, ConversationsPage } from "@/hooks/useConversations";
+import type { ConversationsInfiniteData } from "@/lib/sessionListCache";
 import { useTerminalActivityStore } from "./terminalActivity";
 import {
   terminalInfoFromResource,
@@ -557,6 +558,16 @@ export interface ChatState {
    */
   maybeFlushQueuedHead: () => void;
   /**
+   * Flush queued messages for conversations OTHER than the active one, whose
+   * status in the `["conversations"]` cache is idle. The active conversation is
+   * owned by {@link maybeFlushQueuedHead}; this covers a queue whose session the
+   * user has navigated away from (its SSE stream is gone, so it can't drain
+   * itself). POSTs one message per idle conversation per call, via `postEvent`
+   * (no active-session state touched, no optimistic bubble — it re-hydrates on
+   * return). Level-triggered + idempotent; safe to over-fire.
+   */
+  flushBackgroundQueues: () => void;
+  /**
    * Invoke a skill by posting a ``slash_command`` event — the same wire
    * shape the REPL sends. The server resolves the skill, persists the
    * visible receipt + hidden ``<skill>`` meta message, and forwards the
@@ -908,6 +919,58 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Remove it BEFORE the POST so a re-entrant flush can't double-send.
     set({ queuedMessages: s.queuedMessages.filter((m) => m.queueId !== head.queueId) });
     void s.send(head.text, head.agentId ?? s.boundAgentId, head.files);
+  },
+
+  flushBackgroundQueues: () => {
+    const s = get();
+    if (queryClient === null || s.queuedMessages.length === 0) return;
+
+    // Conversations (other than the active one) that have a queued message.
+    // The active conversation is owned by maybeFlushQueuedHead.
+    const candidateIds = new Set(
+      s.queuedMessages.map((m) => m.conversationId).filter((id) => id !== s.conversationId),
+    );
+    if (candidateIds.size === 0) return;
+
+    // Per-conversation status from the sidebar cache (kept live by the WS
+    // /v1/sessions/updates overlay + poll), so we can tell whether a
+    // navigated-away conversation is idle without its SSE stream.
+    const statusById = new Map<string, string | undefined>();
+    for (const [, data] of queryClient.getQueriesData<ConversationsInfiniteData>({
+      queryKey: ["conversations"],
+    })) {
+      for (const page of data?.pages ?? []) {
+        for (const row of page.data) {
+          if (candidateIds.has(row.id) && !statusById.has(row.id)) {
+            statusById.set(row.id, row.status);
+          }
+        }
+      }
+    }
+
+    // One message per idle conversation per call: POSTing makes it busy, so the
+    // next idle (via WS/poll) triggers this again for the next message (FIFO).
+    for (const conversationId of candidateIds) {
+      if (statusById.get(conversationId) !== "idle") continue;
+      const head = get().queuedMessages.find((m) => m.conversationId === conversationId);
+      // Files are left for the foreground flush — background covers text only
+      // (attachments are in-memory and the user is likely still near that chat).
+      if (head === undefined || (head.files && head.files.length > 0)) continue;
+
+      // Remove BEFORE the POST so a re-entrant trigger can't double-send.
+      set((st) => ({
+        queuedMessages: st.queuedMessages.filter((m) => m.queueId !== head.queueId),
+      }));
+      // No optimistic bubble — we're not viewing this conversation; it
+      // re-hydrates from the snapshot on return. Re-queue on failure so the
+      // next trigger retries; one failure must not block other conversations.
+      void postEvent(conversationId, {
+        type: "message",
+        data: { role: "user", content: [{ type: "input_text", text: head.text }] },
+      }).catch(() => {
+        set((st) => ({ queuedMessages: [...st.queuedMessages, head] }));
+      });
+    }
   },
 
   send: async (text, agentId, files, opts) => {
