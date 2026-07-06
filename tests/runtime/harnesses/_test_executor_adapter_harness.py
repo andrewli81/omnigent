@@ -42,6 +42,7 @@ from omnigent.inner.executor import (
     ToolSpec,
     TurnCancelled,
     TurnComplete,
+    UsageDelta,
 )
 from omnigent.runtime.harnesses._executor_adapter import ExecutorAdapter
 
@@ -176,12 +177,90 @@ def _build_capture_messages() -> Executor:
     return _CapturingExecutor()
 
 
+def _build_usage_delta_single() -> Executor:
+    """
+    MockExecutor that emits one :class:`UsageDelta` then :class:`TurnComplete`.
+
+    Used to verify that the adapter emits ``response.usage_delta`` and
+    suppresses usage on the final ``response.completed``.
+
+    :returns: A configured :class:`MockExecutor` instance.
+    """
+    executor = MockExecutor()
+    executor._turns.append(
+        [
+            UsageDelta(
+                delta={
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                    "model": "test-model",
+                }
+            ),
+            TurnComplete(
+                response="done",
+                usage={
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                    "model": "test-model",
+                },
+            ),
+        ]
+    )
+    return executor
+
+
+def _build_usage_delta_multi() -> Executor:
+    """
+    MockExecutor that emits two :class:`UsageDelta` events then :class:`TurnComplete`.
+
+    Simulates a multi-call turn where usage accumulates. The two deltas
+    sum to the TurnComplete.usage total.
+
+    :returns: A configured :class:`MockExecutor` instance.
+    """
+    executor = MockExecutor()
+    executor._turns.append(
+        [
+            UsageDelta(
+                delta={
+                    "input_tokens": 80,
+                    "output_tokens": 30,
+                    "total_tokens": 110,
+                    "model": "test-model",
+                }
+            ),
+            UsageDelta(
+                delta={
+                    "input_tokens": 20,
+                    "output_tokens": 20,
+                    "total_tokens": 40,
+                    "model": "test-model",
+                }
+            ),
+            TurnComplete(
+                response="done",
+                usage={
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                    "model": "test-model",
+                },
+            ),
+        ]
+    )
+    return executor
+
+
 _SCRIPTS: dict[str, Callable[[], Executor]] = {
     "text_only": _build_text_only,
     "tool_call": _build_tool_call,
     "error": _build_error,
     "cancelled": _build_cancelled,
     "capture_messages": _build_capture_messages,
+    "usage_delta_single": _build_usage_delta_single,
+    "usage_delta_multi": _build_usage_delta_multi,
 }
 
 

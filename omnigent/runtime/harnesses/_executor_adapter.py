@@ -58,6 +58,7 @@ from omnigent.inner.executor import (
     ToolCallRequest,
     TurnCancelled,
     TurnComplete,
+    UsageDelta,
 )
 from omnigent.inner.tracing import TracingContext, is_tracing_enabled
 from omnigent.policies.types import FAIL_CLOSED_PHASES
@@ -350,6 +351,11 @@ class ExecutorAdapter(HarnessApp):
 
         user_message = _extract_last_user_message(request.input)
         # --- End tracing setup --------------------------------------------
+
+        # Reset per-turn UsageDelta tracking. Set to True when the executor
+        # emits at least one UsageDelta; used in _translate_event to suppress
+        # usage on the final TurnComplete (preventing double-counting).
+        self._usage_deltas_emitted = False
 
         # Watcher for mid-turn steering injections. The scaffold
         # routes incoming steering events with
@@ -992,6 +998,20 @@ class ExecutorAdapter(HarnessApp):
             if isinstance(raw_args, dict):
                 item["arguments"] = raw_args
             ctx.emit(OutputItemDoneEvent(type="response.output_item.done", item=item))
+        elif isinstance(event, UsageDelta):
+            # Per-LLM-call incremental usage from a multi-call turn.
+            # Emit as response.usage_delta so the server can accumulate
+            # cost mid-turn without waiting for response.completed.
+            if event.delta:
+                from omnigent.server.schemas import UsageDeltaEvent
+
+                ctx.emit(
+                    UsageDeltaEvent(
+                        type="response.usage_delta",
+                        delta=event.delta,
+                    )
+                )
+                self._usage_deltas_emitted = True
         elif isinstance(event, TurnComplete):
             # If the executor produced a final assistant message
             # via TurnComplete.response (rather than through
@@ -1010,9 +1030,10 @@ class ExecutorAdapter(HarnessApp):
                 pass
             # Capture provider-reported usage so _build_terminal_event
             # can include it in the response.completed SSE payload.
-            # The harness HTTP client reads response["usage"] from that
-            # payload to populate TurnComplete.usage on the Omnigent side.
-            if event.usage is not None:
+            # When UsageDelta events were emitted mid-turn, suppress
+            # usage here to prevent double-counting at the server
+            # (the deltas already accumulated the full turn cost).
+            if event.usage is not None and not self._usage_deltas_emitted:
                 ctx.provider_usage = event.usage
         elif isinstance(event, CompactionComplete):
             from omnigent.server.schemas import (

@@ -42,6 +42,7 @@ from .executor import (
     ToolCallRequest,
     ToolSpec,
     TurnComplete,
+    UsageDelta,
     classify_tool_result,
     split_transient_tail,
 )
@@ -1826,6 +1827,46 @@ class OpenAIAgentsSDKExecutor(Executor):
                 if cached_tok:
                     turn_usage["cache_read_input_tokens"] = cached_tok
         _notify_usage_from_dict(model=model, usage=turn_usage)
+
+        # Emit per-call UsageDelta events from raw_responses so the server
+        # can accumulate cost incrementally. Each raw_response entry
+        # represents one LLM API call; emitting individual deltas lets the
+        # server price multi-model turns correctly and mirrors the pattern
+        # used by the claude-sdk executor. TurnComplete.usage is suppressed
+        # by the adapter when at least one UsageDelta was emitted.
+        if raw_responses:
+            prev_in: int = 0
+            prev_out: int = 0
+            prev_cached: int = 0
+            for raw_r in raw_responses:
+                r_usage = getattr(raw_r, "usage", None)
+                if r_usage is None:
+                    continue
+                r_in = getattr(r_usage, "input_tokens", 0) or 0
+                r_out = getattr(r_usage, "output_tokens", 0) or 0
+                details = getattr(r_usage, "prompt_tokens_details", None)
+                r_cached = 0
+                if details is not None:
+                    r_cached = getattr(details, "cached_tokens", None) or 0
+                    if r_cached == 0 and isinstance(details, dict):
+                        r_cached = details.get("cached_tokens") or 0
+                delta_in = (r_in - r_cached) - (prev_in - prev_cached)
+                delta_out = r_out - prev_out
+                delta_cached = r_cached - prev_cached
+                delta_total = delta_in + delta_out + delta_cached
+                if delta_in > 0 or delta_out > 0:
+                    _delta: dict[str, Any] = {  # type: ignore[explicit-any]
+                        "input_tokens": max(delta_in, 0),
+                        "output_tokens": max(delta_out, 0),
+                        "total_tokens": max(delta_total, 0),
+                        "model": model,
+                    }
+                    if delta_cached > 0:
+                        _delta["cache_read_input_tokens"] = delta_cached
+                    yield UsageDelta(delta=_delta)
+                prev_in = r_in
+                prev_out = r_out
+                prev_cached = r_cached
 
         # Emit CompactionComplete if the SDK compacted this turn.
         if result is not None:

@@ -234,6 +234,31 @@ class CompactionComplete(ExecutorEvent):
 
 
 @dataclass
+class UsageDelta(ExecutorEvent):
+    """Incremental LLM usage from one API call within a multi-call turn.
+
+    Emitted after each individual LLM API call completes when the executor
+    drives multiple round-trips in a single user turn (tool loop). The
+    ``delta`` values are INCREMENTAL (this call only), not cumulative — the
+    sum of all ``UsageDelta`` events in a turn equals the final
+    ``TurnComplete.usage`` billing total.
+
+    Executors that do not support mid-turn emission simply omit this event
+    and deliver the full usage only in ``TurnComplete``. Harnesses that
+    consume ``UsageDelta`` should suppress the ``usage`` field on the
+    resulting ``response.completed`` event to avoid double-counting.
+
+    :param delta: Per-call usage increment. Same keys as
+        ``TurnComplete.usage`` (``input_tokens``, ``output_tokens``,
+        ``total_tokens``, ``cache_read_input_tokens``,
+        ``cache_creation_input_tokens``, ``model``). ``None`` when usage
+        is unavailable for this call.
+    """
+
+    delta: dict[str, Any] | None = None
+
+
+@dataclass
 class TurnCancelled(ExecutorEvent):
     """The current assistant turn was cancelled before completion."""
 

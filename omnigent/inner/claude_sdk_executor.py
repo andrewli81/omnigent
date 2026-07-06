@@ -2093,6 +2093,12 @@ class ClaudeSDKExecutor(Executor):
         # with the tool name and duration when results arrive.
         pending_tools: dict[str, tuple[str, float]] = {}  # id → (name, start_mono)
 
+        # Cumulative usage at the time of the last UsageDelta emission.
+        # Used to compute the per-call INCREMENT so each delta carries
+        # only the tokens from that one API call, not the running total.
+        # None until the first UsageDelta has been emitted this turn.
+        _last_delta_cumulative: dict[str, Any] | None = None  # type: ignore[explicit-any]
+
         # Track whether we've received any StreamEvent messages.
         # When True, we skip text/tool events from AssistantMessage to
         # avoid double-emitting (the SDK sends both StreamEvents AND
@@ -2541,6 +2547,29 @@ class ClaudeSDKExecutor(Executor):
                 "context_tokens": ctx_in + ctx_cc + ctx_cr,
                 "model": observed_model or model,
             }
+
+        # ── UsageDelta emission ───────────────────────────────────
+        # Emit an incremental usage event for this API call so the server
+        # can accumulate cost mid-turn. ``turn_usage`` is CUMULATIVE across
+        # all API calls this turn; we subtract what was emitted previously
+        # to produce the per-call increment.
+        if turn_usage is not None:
+            from omnigent.inner.executor import UsageDelta
+
+            prev = _last_delta_cumulative or {}
+            _delta: dict[str, Any] = {  # type: ignore[explicit-any]
+                k: (turn_usage.get(k) or 0) - (prev.get(k) or 0)
+                for k in (
+                    "input_tokens",
+                    "output_tokens",
+                    "total_tokens",
+                    "cache_read_input_tokens",
+                    "cache_creation_input_tokens",
+                )
+            }
+            _delta["model"] = turn_usage.get("model")
+            yield UsageDelta(delta=_delta)
+            _last_delta_cumulative = turn_usage
 
         # ── LLM_RESPONSE policy evaluation ───────────────────────
         # Evaluate after the stream completes but before TurnComplete

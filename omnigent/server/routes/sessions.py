@@ -9871,7 +9871,19 @@ async def _relay_runner_stream(
                     # Accumulate LLM token usage from the harness
                     # response so policy callables can read
                     # event["context"]["usage"]["total_cost_usd"].
-                    if evt_type == "response.completed":
+                    if evt_type == "response.usage_delta":
+                        # Incremental usage from one LLM API call within a
+                        # multi-call turn. Accumulate immediately so cost-budget
+                        # policies and daily limits see current spend mid-turn.
+                        # response.completed will carry no usage when this event
+                        # was emitted (executor suppresses it to avoid double-
+                        # counting), so these deltas ARE the full turn cost.
+                        _accumulate_session_usage(
+                            {"usage": event.get("delta")},
+                            session_id,
+                            conversation_store,
+                        )
+                    elif evt_type == "response.completed":
                         # Persist the turn's usage (cost + token buckets) so
                         # policy callables can read
                         # event["context"]["usage"]["total_cost_usd"] and the

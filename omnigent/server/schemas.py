@@ -3318,6 +3318,30 @@ class InProgressEvent(_SSEEventBase):
     response: ResponseObject
 
 
+class UsageDeltaEvent(_SSEEventBase):
+    """
+    Incremental LLM usage from one API call within a multi-call turn.
+
+    Emitted mid-turn after each individual LLM round-trip by executors
+    that support it (currently claude-sdk). The server accumulates these
+    deltas in real time via ``_accumulate_session_usage`` so cost-budget
+    policies and daily limits see up-to-date spend without waiting for
+    ``response.completed``. When this event is emitted, the final
+    ``response.completed`` will carry no ``usage`` field (to avoid
+    double-counting).
+
+    :param type: Always ``"response.usage_delta"``.
+    :param delta: Per-call usage increment. Same keys as the
+        ``usage`` field on ``ResponseObject`` (``input_tokens``,
+        ``output_tokens``, ``total_tokens``, ``cache_read_input_tokens``,
+        ``cache_creation_input_tokens``, ``model``). Values represent the
+        increment for this single API call only.
+    """
+
+    type: Literal["response.usage_delta"]
+    delta: dict[str, Any]
+
+
 class CompletedEvent(_SSEEventBase):
     """
     Terminal event for a successfully completed turn.
@@ -3773,6 +3797,7 @@ ServerStreamEvent = Annotated[
     | CreatedEvent
     | QueuedEvent
     | InProgressEvent
+    | UsageDeltaEvent
     | CompletedEvent
     | FailedEvent
     | CancelledEvent

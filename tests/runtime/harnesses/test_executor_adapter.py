@@ -428,6 +428,126 @@ async def test_turn_cancelled_terminates_with_response_cancelled(
     assert terminal_response.get("error") is None
 
 
+# ── UsageDelta mid-turn emission ──────────────────────────────
+
+
+@pytest.fixture
+def use_usage_delta_single(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MockExecutor that emits one UsageDelta then TurnComplete."""
+    monkeypatch.setenv("MOCK_EXECUTOR_SCRIPT", "usage_delta_single")
+
+
+@pytest.fixture
+def use_usage_delta_multi(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MockExecutor that emits two UsageDelta events then TurnComplete."""
+    monkeypatch.setenv("MOCK_EXECUTOR_SCRIPT", "usage_delta_multi")
+
+
+@pytest.mark.asyncio
+async def test_usage_delta_emits_usage_delta_sse_event(
+    use_usage_delta_single: None,
+    manager: HarnessProcessManager,
+) -> None:
+    """A single UsageDelta executor event becomes a response.usage_delta SSE event.
+
+    What breaks if this fails: mid-turn cost deltas are silently dropped and
+    the server never accumulates cost until turn-end.
+    """
+    conv_id = "conv_usage_delta_single"
+    client = await manager.get_client(conv_id, _TEST_HARNESS_NAME)
+    events: list[_ParsedSSEEvent] = []
+    async with client.stream(
+        "POST", f"/v1/sessions/{conv_id}/events", json=_start_turn_body()
+    ) as response:
+        async for event in _stream_iter(response):
+            events.append(event)
+
+    delta_events = [e for e in events if e.event == "response.usage_delta"]
+    assert len(delta_events) == 1, f"expected 1 usage_delta, got: {[e.event for e in events]}"
+    delta = delta_events[0].data["delta"]
+    assert delta["input_tokens"] == 100
+    assert delta["output_tokens"] == 50
+    assert delta["model"] == "test-model"
+
+
+@pytest.mark.asyncio
+async def test_usage_delta_suppresses_usage_on_completed(
+    use_usage_delta_single: None,
+    manager: HarnessProcessManager,
+) -> None:
+    """When UsageDelta was emitted, response.completed carries no usage field.
+
+    What breaks if this fails: the server double-counts — once per usage_delta
+    and again on response.completed — inflating the session cost.
+    """
+    conv_id = "conv_usage_delta_no_double"
+    client = await manager.get_client(conv_id, _TEST_HARNESS_NAME)
+    events: list[_ParsedSSEEvent] = []
+    async with client.stream(
+        "POST", f"/v1/sessions/{conv_id}/events", json=_start_turn_body()
+    ) as response:
+        async for event in _stream_iter(response):
+            events.append(event)
+
+    completed = next(e for e in events if e.event == "response.completed")
+    response_obj = completed.data.get("response", {})
+    assert response_obj.get("usage") is None, (
+        "response.completed must not carry usage when UsageDelta events were emitted"
+    )
+
+
+@pytest.mark.asyncio
+async def test_usage_delta_multi_emits_all_deltas(
+    use_usage_delta_multi: None,
+    manager: HarnessProcessManager,
+) -> None:
+    """Multiple UsageDelta events each become a separate response.usage_delta SSE event.
+
+    What breaks if this fails: only the first or last delta is emitted,
+    silently dropping intermediate per-call cost data.
+    """
+    conv_id = "conv_usage_delta_multi"
+    client = await manager.get_client(conv_id, _TEST_HARNESS_NAME)
+    events: list[_ParsedSSEEvent] = []
+    async with client.stream(
+        "POST", f"/v1/sessions/{conv_id}/events", json=_start_turn_body()
+    ) as response:
+        async for event in _stream_iter(response):
+            events.append(event)
+
+    delta_events = [e for e in events if e.event == "response.usage_delta"]
+    assert len(delta_events) == 2, f"expected 2 usage_deltas, got: {len(delta_events)}"
+    assert delta_events[0].data["delta"]["input_tokens"] == 80
+    assert delta_events[1].data["delta"]["input_tokens"] == 20
+
+
+@pytest.mark.asyncio
+async def test_no_usage_delta_preserves_completed_usage(
+    use_text_only: None,
+    manager: HarnessProcessManager,
+) -> None:
+    """When no UsageDelta is emitted, response.completed carries usage as before.
+
+    What breaks if this fails: executors that don't emit UsageDelta (e.g. most
+    non-claude-sdk harnesses) stop reporting cost at turn-end.
+    """
+    conv_id = "conv_no_usage_delta"
+    client = await manager.get_client(conv_id, _TEST_HARNESS_NAME)
+    events: list[_ParsedSSEEvent] = []
+    async with client.stream(
+        "POST", f"/v1/sessions/{conv_id}/events", json=_start_turn_body()
+    ) as response:
+        async for event in _stream_iter(response):
+            events.append(event)
+
+    delta_events = [e for e in events if e.event == "response.usage_delta"]
+    assert len(delta_events) == 0
+
+    # text_only emits TurnComplete with no usage — just confirm no crash.
+    completed = next(e for e in events if e.event == "response.completed")
+    assert completed.data["response"]["status"] == "completed"
+
+
 # ── Error-code classification ──────────────────────────────────
 
 
