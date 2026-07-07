@@ -9010,22 +9010,27 @@ async def test_events_interrupt_on_native_session_503_skips_cleanup_when_inject_
 
 
 class _EventRecordingServerClient(NullServerClient):
-    """Records Omnigent ``external_conversation_item`` POSTs for assertion.
+    """Records Omnigent ``external_*`` event POSTs for assertion.
 
     Subclasses :class:`NullServerClient` so all other runner→AP calls still
-    succeed silently; captures the bodies so a test can assert that NO
-    interrupt marker was persisted.
+    succeed silently; captures ``external_conversation_item`` bodies so a
+    test can assert that NO interrupt marker was persisted, and
+    ``external_mcp_startup`` bodies so Stop tests can assert the cancelled
+    MCP map was published.
     """
 
     def __init__(self) -> None:
         self.posted_items: list[dict[str, Any]] = []
+        self.posted_mcp_startup: list[dict[str, Any]] = []
 
     async def post(self, url: str, **kwargs: Any) -> NullServerClient._Response:
-        """Record ``external_conversation_item`` bodies."""
+        """Record ``external_conversation_item`` / ``external_mcp_startup`` bodies."""
         del url
         body = kwargs.get("json")
         if isinstance(body, dict) and body.get("type") == "external_conversation_item":
             self.posted_items.append(body.get("data") or {})
+        if isinstance(body, dict) and body.get("type") == "external_mcp_startup":
+            self.posted_mcp_startup.append(body.get("data") or {})
         return self._Response()
 
 
@@ -9931,11 +9936,20 @@ async def test_events_stop_on_codex_native_cancels_mcp_startup_without_active_tu
         f"codex-native {event_type} during MCP startup must send the startup "
         f"interrupt (empty turnId); got {fake_client.requests!r}."
     )
-    # The local flip is what unblocks the executor's first-turn gate even
-    # if Codex never acknowledges the interrupt.
+    # The local flip is authoritative even if Codex never acknowledges
+    # the interrupt.
     assert codex_native_bridge.read_mcp_startup(bridge_dir) == {
         "storage-console": {"status": "cancelled", "error": None}
     }
+    # And the flipped map is PUBLISHED: the forwarder only reposts when it
+    # changes the map itself and codex's cancelled edges are owner-only,
+    # so without this post the web band would stay stuck on "starting".
+    assert server_client.posted_mcp_startup == [
+        {"servers": {"storage-console": {"status": "cancelled", "error": None}}}
+    ], (
+        f"codex-native {event_type} must publish the cancelled MCP map; "
+        f"got {server_client.posted_mcp_startup!r}."
+    )
 
 
 @pytest.mark.asyncio
@@ -10051,6 +10065,10 @@ async def test_events_interrupt_on_codex_native_with_turn_and_mcp_stops_both(
     assert codex_native_bridge.read_mcp_startup(bridge_dir) == {
         "storage-console": {"status": "cancelled", "error": None}
     }
+    # The cancelled map is published to the session (band + snapshot update).
+    assert server_client.posted_mcp_startup == [
+        {"servers": {"storage-console": {"status": "cancelled", "error": None}}}
+    ]
 
 
 @pytest.mark.asyncio

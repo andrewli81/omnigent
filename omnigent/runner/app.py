@@ -10841,6 +10841,7 @@ def create_runner_app(
             CODEX_NATIVE_BRIDGE_ID_LABEL_KEY,
             bridge_dir_for_bridge_id,
             cancel_pending_mcp_startup,
+            read_mcp_startup,
         )
 
         state = await _codex_native_bridge_state_for_session(conv_id, action="interrupt")
@@ -10866,6 +10867,23 @@ def create_runner_app(
                 conv_id,
                 ", ".join(pending_mcp),
             )
+            # Publish the flipped map ourselves: the forwarder only reposts
+            # when IT changes the map, and codex's own cancelled edges are
+            # owner-only — without this post the web band and snapshot stay
+            # stuck on "Starting MCP servers" after a Stop.
+            try:
+                await server_client.post(
+                    f"/v1/sessions/{conv_id}/events",
+                    json={
+                        "type": "external_mcp_startup",
+                        "data": {"servers": read_mcp_startup(bridge_dir)},
+                    },
+                    timeout=10.0,
+                )
+            except Exception:  # noqa: BLE001 - the bridge flip already took effect locally.
+                _logger.warning(
+                    "Failed to publish cancelled MCP startup for %s", conv_id, exc_info=True
+                )
 
         codex_client = client_for_transport(
             state.socket_path,

@@ -39,6 +39,7 @@ from omnigent.codex_native_bridge import (
     CodexNativeBridgeState,
     clear_active_turn_id_if_matches,
     codex_home_for_bridge_dir,
+    pending_mcp_servers,
     read_bridge_state,
     read_codex_config_model,
     read_mcp_startup,
@@ -3164,12 +3165,41 @@ def _mcp_startup_settle_timeout_seconds(bridge_dir: Path) -> float:
     servers = config.get("mcp_servers")
     if isinstance(servers, dict):
         for table in servers.values():
-            if not isinstance(table, dict):
+            # Same enabled filter as _expected_mcp_servers_from_config:
+            # codex never boots a disabled server, so its budget must not
+            # stretch the window for a round it is not part of.
+            if not isinstance(table, dict) or table.get("enabled") is False:
                 continue
             timeout = table.get("startup_timeout_sec")
             if isinstance(timeout, (int, float)) and timeout > slowest:
                 slowest = float(timeout)
     return min(slowest + _MCP_STARTUP_SETTLE_GRACE_SECONDS, _MCP_STARTUP_SETTLE_MAX_SECONDS)
+
+
+def _arm_mcp_settle_timer(
+    client: httpx.AsyncClient,
+    *,
+    session_id: str,
+    bridge_dir: Path,
+) -> asyncio.Task[None]:
+    """
+    Arm the bounded settle window for an in-flight MCP startup round.
+
+    :param client: HTTP client for Omnigent event posts.
+    :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
+    :param bridge_dir: Native Codex bridge directory.
+    :returns: The settle-timer task.
+    """
+    timeout = _mcp_startup_settle_timeout_seconds(bridge_dir)
+
+    async def settle_after_window() -> None:
+        """Settle the synthesized round once the startup window elapses."""
+        await _sleep(timeout)
+        await _settle_mcp_startup(
+            client, session_id=session_id, bridge_dir=bridge_dir, reason="startup window elapsed"
+        )
+
+    return asyncio.create_task(settle_after_window(), name="codex-native-mcp-settle")
 
 
 async def _seed_mcp_startup_round(
@@ -3181,19 +3211,27 @@ async def _seed_mcp_startup_round(
     """
     Record the config-declared MCP servers as ``starting`` and post them.
 
-    Runs once per app-server launch: ``clear_bridge_state`` wipes the
+    Seeds once per app-server launch: ``clear_bridge_state`` wipes the
     recorded map before each launch, and an existing map means a
     forwarder reconnect mid-session — reseeding then would flash a false
-    "starting" band for servers that finished booting long ago.
+    "starting" band for servers that finished booting long ago. A
+    reconnect that finds the round still pending does re-arm the settle
+    window, though: the previous forwarder's timer died with it, and
+    without a replacement a missed idle edge would leave the band stuck
+    on "starting" for the rest of the session.
 
     :param client: HTTP client for Omnigent event posts.
     :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
     :param bridge_dir: Native Codex bridge directory.
-    :returns: The armed settle-timer task, or ``None`` when nothing was
-        seeded.
+    :returns: The armed settle-timer task, or ``None`` when the recorded
+        round has already settled.
     """
-    if read_mcp_startup(bridge_dir):
-        return None
+    existing = read_mcp_startup(bridge_dir)
+    if existing:
+        if not pending_mcp_servers(existing):
+            return None
+        _logger.info("Codex MCP startup round still pending after reconnect; re-arming settle")
+        return _arm_mcp_settle_timer(client, session_id=session_id, bridge_dir=bridge_dir)
     expected = _expected_mcp_servers_from_config(bridge_dir)
     if not expected:
         return None
@@ -3202,16 +3240,7 @@ async def _seed_mcp_startup_round(
         servers = update_mcp_server_startup(bridge_dir, name, MCP_STARTUP_STARTING)
     _logger.info("Codex MCP startup round synthesized: %s", ", ".join(expected))
     await _post_mcp_startup(client, session_id, servers)
-    timeout = _mcp_startup_settle_timeout_seconds(bridge_dir)
-
-    async def settle_after_window() -> None:
-        """Settle the synthesized round once the startup window elapses."""
-        await _sleep(timeout)
-        await _settle_mcp_startup(
-            client, session_id=session_id, bridge_dir=bridge_dir, reason="startup window elapsed"
-        )
-
-    return asyncio.create_task(settle_after_window(), name="codex-native-mcp-settle")
+    return _arm_mcp_settle_timer(client, session_id=session_id, bridge_dir=bridge_dir)
 
 
 async def _settle_mcp_startup(

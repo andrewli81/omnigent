@@ -2076,6 +2076,58 @@ async def test_seed_mcp_startup_round_skips_when_state_exists(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_seed_rearms_settle_timer_when_round_still_pending(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    A reconnect that finds the round still pending re-arms the settle window.
+
+    The previous forwarder's settle timer dies with its connection; if the
+    reconnect only skipped reseeding, a missed idle edge would leave the
+    band stuck on "starting" for the rest of the session. The re-armed
+    timer must actually resolve the round: once it fires, the pending
+    entries are dropped and the settled map is posted.
+    """
+    from omnigent.codex_native_bridge import read_mcp_startup, update_mcp_server_startup
+
+    client = _RecordingClient()
+    update_mcp_server_startup(tmp_path, "safe", "starting")
+    update_mcp_server_startup(tmp_path, "storage-console", "cancelled")
+
+    async def _no_sleep(_seconds: float) -> None:
+        """Collapse the settle window so the test observes the timer firing."""
+
+    monkeypatch.setattr(fwd, "_sleep", _no_sleep)
+
+    timer = await fwd._seed_mcp_startup_round(
+        client,  # type: ignore[arg-type]
+        session_id="conv_x",
+        bridge_dir=tmp_path,
+    )
+
+    # No reseed/repost on reconnect — the recorded map is left intact...
+    assert timer is not None
+    assert client.posts == []
+    assert read_mcp_startup(tmp_path)["safe"]["status"] == "starting"
+
+    # ...but the re-armed timer settles the round when the window elapses.
+    await timer
+    assert read_mcp_startup(tmp_path) == {
+        "storage-console": {"status": "cancelled", "error": None}
+    }
+    assert client.posts == [
+        (
+            "/v1/sessions/conv_x/events",
+            {
+                "type": "external_mcp_startup",
+                "data": {"servers": {"storage-console": {"status": "cancelled", "error": None}}},
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_thread_idle_settles_synthesized_round(tmp_path: Path) -> None:
     """
     An idle ``thread/status/changed`` resolves the synthesized round.
@@ -2173,3 +2225,12 @@ def test_settle_timeout_tracks_slowest_configured_server(tmp_path: Path) -> None
         '[mcp_servers.slow]\ncommand = "y"\nstartup_timeout_sec = 100000\n',
     )
     assert fwd._mcp_startup_settle_timeout_seconds(tmp_path) == 240.0
+
+    # A disabled server's budget must not stretch the window: codex never
+    # boots it, and the seed excludes it from the synthesized round.
+    _write_session_config(
+        tmp_path,
+        '[mcp_servers.fast]\ncommand = "x"\n'
+        '[mcp_servers.off]\ncommand = "y"\nenabled = false\nstartup_timeout_sec = 120\n',
+    )
+    assert fwd._mcp_startup_settle_timeout_seconds(tmp_path) == 25.0
