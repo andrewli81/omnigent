@@ -5783,6 +5783,96 @@ async def test_post_external_session_todos_rejects_non_list_todos(
     assert "external_session_todos" in resp.text
 
 
+async def test_post_external_mcp_startup_publishes_session_mcp_startup(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    ``external_mcp_startup`` publishes a ``session.mcp_startup`` SSE event.
+
+    The codex-native forwarder posts the full per-server map on every MCP
+    startup edge so the web UI can show which servers are still starting
+    instead of an apparently hung session (issue #2058). A regression here
+    leaves the session silent while Codex boots slow or failing MCP
+    servers.
+    """
+    published: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.session_stream.publish",
+        lambda sid, ev: published.append((sid, ev)),
+    )
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+    servers = {
+        "safe": {"status": "failed", "error": "handshake failed"},
+        "storage-console": {"status": "starting", "error": None},
+    }
+
+    from omnigent.server.routes import sessions as sessions_module
+
+    try:
+        resp = await client.post(
+            f"/v1/sessions/{session['id']}/events",
+            json={"type": "external_mcp_startup", "data": {"servers": servers}},
+        )
+        assert resp.status_code == 202, resp.text
+        assert resp.json() == {"queued": False}
+
+        # Exactly one session.mcp_startup event, carrying the full map.
+        assert [ev["type"] for _, ev in published] == ["session.mcp_startup"]
+        assert published[0][0] == session["id"]
+        assert published[0][1]["conversation_id"] == session["id"]
+        assert published[0][1]["servers"] == servers
+
+        # The snapshot replays the map so a client opening the session
+        # mid-startup seeds the band without waiting for the next event.
+        snapshot = (await client.get(f"/v1/sessions/{session['id']}")).json()
+        assert snapshot["mcp_startup"] == servers
+
+        # An empty (settled) map evicts the cache — the snapshot goes back
+        # to carrying no startup state instead of a stale settled map.
+        settled = await client.post(
+            f"/v1/sessions/{session['id']}/events",
+            json={"type": "external_mcp_startup", "data": {"servers": {}}},
+        )
+        assert settled.status_code == 202, settled.text
+        snapshot = (await client.get(f"/v1/sessions/{session['id']}")).json()
+        assert snapshot["mcp_startup"] is None
+    finally:
+        sessions_module._session_mcp_startup_cache.pop(session["id"], None)
+
+
+async def test_post_external_mcp_startup_rejects_malformed_servers(
+    client: httpx.AsyncClient,
+) -> None:
+    """
+    Malformed ``data.servers`` payloads are rejected with a 400.
+
+    A missing map, or a server record with an unknown status, must fail
+    loud at the route boundary rather than publish a bogus SSE frame the
+    web UI would render as a stuck startup band.
+    """
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+
+    missing = await client.post(
+        f"/v1/sessions/{session['id']}/events",
+        json={"type": "external_mcp_startup", "data": {}},
+    )
+    assert missing.status_code == 400, missing.text
+    assert "external_mcp_startup" in missing.text
+
+    bad_status = await client.post(
+        f"/v1/sessions/{session['id']}/events",
+        json={
+            "type": "external_mcp_startup",
+            "data": {"servers": {"safe": {"status": "exploded"}}},
+        },
+    )
+    assert bad_status.status_code == 400, bad_status.text
+    assert "external_mcp_startup" in bad_status.text
+
+
 async def test_post_external_conversation_item_auto_assigns_response_id(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
