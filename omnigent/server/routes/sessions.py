@@ -5714,14 +5714,17 @@ def _publish_mcp_startup(session_id: str, servers: dict[str, McpServerStartup]) 
     per-server startup state while the harness boots instead of an
     apparently hung session. Also updates the snapshot cache so a client
     opening the session mid-startup seeds the band from the snapshot's
-    ``mcp_startup`` field; an empty (settled) map evicts the cache entry.
+    ``mcp_startup`` field; a map with nothing left to show — empty, or
+    every server ``ready`` — evicts the cache entry, mirroring the web
+    store's all-ready clear so a reloading client never seeds a band
+    that renders nothing.
 
     :param session_id: Session/conversation identifier,
         e.g. ``"conv_abc123"``.
     :param servers: Latest per-server startup map, e.g.
         ``{"safe": McpServerStartup(status="starting", error=None)}``.
     """
-    if servers:
+    if any(record.status != "ready" for record in servers.values()):
         _session_mcp_startup_cache[session_id] = servers
     else:
         _session_mcp_startup_cache.pop(session_id, None)
@@ -19838,6 +19841,10 @@ def create_sessions_router(
         # failed-launch session would leak one entry for the process
         # lifetime.
         _session_sandbox_status_cache.pop(session_id, None)
+        # Same for MCP startup state: failed/cancelled maps are retained
+        # for reload visibility while the session exists, so a session
+        # whose MCP startup never settled clean would leak its entry.
+        _session_mcp_startup_cache.pop(session_id, None)
         # Drop the deleted session's per-user read-state from every user's
         # caches so they don't accumulate orphan entries for the process
         # lifetime.

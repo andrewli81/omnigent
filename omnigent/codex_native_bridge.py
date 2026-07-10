@@ -538,6 +538,10 @@ def settle_pending_mcp_startup(bridge_dir: Path) -> tuple[dict[str, dict[str, st
     :returns: ``(map_after, changed)`` — the settled map and whether any
         entry was dropped.
     """
+    # The read→write below is not locked across processes: a runner Stop
+    # can flip an entry to ``cancelled`` in between, and this write drops
+    # it. Cosmetic only — both outcomes end the round, and the Stop path
+    # publishes its cancelled map independently.
     servers = read_mcp_startup(bridge_dir)
     pending = pending_mcp_servers(servers)
     if not pending:

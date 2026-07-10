@@ -138,6 +138,9 @@ class CodexNativeExecutor(Executor):
             return False
         # Flip the local map first: the cancelled record is what the web
         # band and turn-error text read, even if Codex never acknowledges.
+        # Unlike the runner's Stop handler, the flipped map is not
+        # published here — the inner process has no server client; web
+        # Stop routes through the runner handler, which does publish.
         pending = cancel_pending_mcp_startup(self._bridge_dir)
         if state.active_turn_id is None and not pending:
             return False
